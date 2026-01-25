@@ -3,6 +3,7 @@ import json
 
 from receipt_extractor import file_io as io_mod
 from receipt_extractor import gpt
+from receipt_extractor import postprocess
 
 def process_directory(dirpath):
     """Process all receipt files in a directory and extract structured data.
@@ -17,6 +18,7 @@ def process_directory(dirpath):
     for name, path in io_mod.list_files(dirpath):
         image_b64 = io_mod.encode_file(path)
         data = gpt.extract_receipt_info(image_b64)
+        data = postprocess.normalize_amount(data)
         results[name] = data
     return results
 
