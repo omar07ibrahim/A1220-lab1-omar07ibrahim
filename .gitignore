@@ -1,0 +1,20 @@
+.DS_Store
+.env
+.env.*
+.venv/
+.gh/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+docs/
+receipts/
+
+# Local lab artifacts / secrets
+COMMAND_API_OPENAI.txt
+app.zip
+lab.pdf
