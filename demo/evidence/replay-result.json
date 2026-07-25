@@ -1,0 +1,19 @@
+{
+  "mode": "replay",
+  "receipts": {
+    "cafe-lumen.png": {
+      "amount": "$18.40",
+      "category": "Meals",
+      "date": "2026-07-24",
+      "vendor": "Cafe Lumen"
+    },
+    "metro-line.webp": {
+      "amount": "$3.25",
+      "category": "Transport",
+      "date": "2026-07-24",
+      "vendor": "Metro Line"
+    }
+  },
+  "replay_manifest_sha256": "sha256:f994e398fe79f575daefbd566feb37c4b9dfcbe1db7838bb6218630b072d04d5",
+  "schema_version": 1
+}

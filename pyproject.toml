@@ -37,7 +37,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 addopts = [
-  "--basetemp=.venv/pytest-tmp",
+  "--basetemp=.pytest-tmp",
   "--strict-config",
   "--strict-markers",
   "-ra",
@@ -67,4 +67,5 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "PYI"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
+mypy_path = "src"

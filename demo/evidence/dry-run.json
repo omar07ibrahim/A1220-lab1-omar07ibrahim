@@ -1,0 +1,23 @@
+{
+  "count": 2,
+  "images": [
+    {
+      "height": 1080,
+      "media_type": "image/png",
+      "name": "cafe-lumen.png",
+      "sha256": "1a9d5c5d4d1f9e2ec4b6d5b2b9a8006efac7f044c4011f7648a9311ae7071a35",
+      "size_bytes": 37227,
+      "width": 720
+    },
+    {
+      "height": 1080,
+      "media_type": "image/webp",
+      "name": "metro-line.webp",
+      "sha256": "d3a2f4f45454b2870779a040421fcee7527c8c2b72ee92024f99d26f5b68bae0",
+      "size_bytes": 12350,
+      "width": 720
+    }
+  ],
+  "mode": "dry-run",
+  "schema_version": 1
+}

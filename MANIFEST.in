@@ -1,0 +1,10 @@
+include LICENSE
+include Makefile
+include README.md
+include pyproject.toml
+include requirements.txt
+include requirements-dev.txt
+recursive-include demo *
+recursive-include docs/assets *
+recursive-include scripts *.py
+recursive-include tests *.py

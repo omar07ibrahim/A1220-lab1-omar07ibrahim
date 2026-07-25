@@ -1,0 +1,28 @@
+{
+  "combined_percent": 91.33,
+  "command": "make check",
+  "modules": [
+    {
+      "module": "file_io",
+      "percent": 91.91
+    },
+    {
+      "module": "main",
+      "percent": 89.91
+    },
+    {
+      "module": "replay",
+      "percent": 90.48
+    },
+    {
+      "module": "gpt",
+      "percent": 100.0
+    },
+    {
+      "module": "schema",
+      "percent": 100.0
+    }
+  ],
+  "schema_version": 1,
+  "test_count": 121
+}

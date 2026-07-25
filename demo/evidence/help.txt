@@ -1,0 +1,25 @@
+usage: main.py [-h] [--dry-run | --replay MANIFEST.json] [--acknowledge-remote-upload]
+               [--max-files MAX_FILES] [--max-file-mib MAX_FILE_MIB]
+               [--max-total-mib MAX_TOTAL_MIB] [--output OUTPUT | --stdout]
+               dirpath
+
+Validate a bounded directory of receipt images and extract structured fields.
+
+positional arguments:
+  dirpath               directory containing direct-child images
+
+options:
+  -h, --help            show this help message and exit
+  --dry-run             validate inputs and emit local audit metadata without importing OpenAI
+  --replay MANIFEST.json
+                        reproduce an exact recorded batch locally without importing OpenAI
+  --acknowledge-remote-upload
+                        confirm that image bytes and embedded metadata may leave this machine
+  --max-files MAX_FILES
+                        maximum images per batch (default: 20)
+  --max-file-mib MAX_FILE_MIB
+                        maximum encoded bytes per image in MiB (default: 10)
+  --max-total-mib MAX_TOTAL_MIB
+                        maximum encoded bytes across the batch in MiB (default: 50)
+  --output OUTPUT       reserve a private JSON file; existing paths are never replaced
+  --stdout, --print     explicitly emit extracted receipt fields to stdout

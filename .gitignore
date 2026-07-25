@@ -8,11 +8,11 @@ __pycache__/
 *.egg-info/
 .coverage
 .pytest_cache/
+.pytest-tmp/
 .mypy_cache/
 .ruff_cache/
 build/
 dist/
-docs/
 htmlcov/
 receipts/
 result.json
