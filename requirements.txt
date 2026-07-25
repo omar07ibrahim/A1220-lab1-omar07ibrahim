@@ -1,2 +1,2 @@
-openai
-pdoc
+openai==2.48.0
+Pillow==12.3.0

@@ -1,7 +1,13 @@
 """OpenAI client wrapper for extracting receipt information."""
 
+from __future__ import annotations
+
 import json
+from typing import Any, cast
+
 from openai import OpenAI
+
+from receipt_extractor.file_io import ImagePayload
 
 CATEGORIES = [
     "Meals",
@@ -12,20 +18,21 @@ CATEGORIES = [
     "Other",
 ]
 
-def _get_client():
+
+def _get_client() -> OpenAI:
     """Create an OpenAI client from environment configuration.
 
     Returns:
         OpenAI: Initialized OpenAI client.
     """
-    return OpenAI()
+    return OpenAI(max_retries=2, timeout=30.0)
 
 
-def extract_receipt_info(image_b64):
-    """Extract receipt fields from a base64-encoded image using an LLM.
+def extract_receipt_info(image: ImagePayload) -> dict[str, Any]:
+    """Extract receipt fields from one validated image using an LLM.
 
     Args:
-        image_b64 (str): Base64-encoded image contents.
+        image (ImagePayload): Validated bytes with their detected media type.
 
     Returns:
         dict: Parsed JSON with keys: date, amount, vendor, category.
@@ -58,14 +65,16 @@ The output must be valid JSON.
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_b64}"
-                        }
-                    }
-                ]
+                    {"type": "image_url", "image_url": {"url": image.data_url()}},
+                ],
             }
-        ]
+        ],
+        max_completion_tokens=300,
     )
-    return json.loads(response.choices[0].message.content)
+    content = response.choices[0].message.content
+    if content is None:
+        raise ValueError("provider returned no receipt payload")
+    parsed = json.loads(content)
+    if not isinstance(parsed, dict):
+        raise TypeError("provider returned a non-object receipt payload")
+    return cast(dict[str, Any], parsed)

@@ -1,7 +1,12 @@
 """Post-processing helpers for model outputs."""
 
+from __future__ import annotations
 
-def normalize_amount(receipt_data):
+import math
+from typing import Any
+
+
+def normalize_amount(receipt_data: dict[str, Any]) -> dict[str, Any]:
     """Normalize the amount field by removing '$' and casting to float.
 
     Args:
@@ -11,24 +16,31 @@ def normalize_amount(receipt_data):
         dict: Updated receipt data with "amount" converted to float when possible.
             If conversion fails, "amount" is set to None.
     """
-    if not isinstance(receipt_data, dict):
-        return receipt_data
-
     amount = receipt_data.get("amount")
     if amount is None:
         return receipt_data
 
-    if isinstance(amount, (int, float)):
-        receipt_data["amount"] = float(amount)
+    if isinstance(amount, bool):
+        receipt_data["amount"] = None
         return receipt_data
 
+    normalized: float
+    if isinstance(amount, (int, float)):
+        try:
+            normalized = float(amount)
+        except OverflowError:
+            receipt_data["amount"] = None
+            return receipt_data
     if isinstance(amount, str):
         cleaned = amount.replace("$", "").strip()
         try:
-            receipt_data["amount"] = float(cleaned)
-        except ValueError:
+            normalized = float(cleaned)
+        except (OverflowError, ValueError):
             receipt_data["amount"] = None
+            return receipt_data
+    elif not isinstance(amount, (int, float)):
+        receipt_data["amount"] = None
         return receipt_data
 
-    receipt_data["amount"] = None
+    receipt_data["amount"] = normalized if math.isfinite(normalized) else None
     return receipt_data

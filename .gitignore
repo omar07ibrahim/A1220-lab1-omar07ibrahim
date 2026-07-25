@@ -6,13 +6,16 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.coverage
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 build/
 dist/
 docs/
+htmlcov/
 receipts/
+result.json
 
 # Local lab artifacts / secrets
 COMMAND_API_OPENAI.txt
