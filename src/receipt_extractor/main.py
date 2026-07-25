@@ -11,9 +11,13 @@ import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from receipt_extractor import file_io, postprocess
+from receipt_extractor import file_io
+from receipt_extractor.schema import ReceiptFields
+
+if TYPE_CHECKING:
+    from receipt_extractor.replay import ReplayProvider
 
 Extractor = Callable[[file_io.ImagePayload], dict[str, Any]]
 
@@ -133,7 +137,14 @@ def process_images(
     results: dict[str, dict[str, Any]] = {}
     for image in images:
         data = extractor(image)
-        results[image.name] = postprocess.normalize_amount(data)
+        encoded = json.dumps(
+            data,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        receipt = ReceiptFields.model_validate_json(encoded, strict=True)
+        results[image.name] = receipt.model_dump(mode="json")
     return results
 
 
@@ -174,10 +185,17 @@ def _build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("dirpath", help="directory containing direct-child images")
-    parser.add_argument(
+    execution = parser.add_mutually_exclusive_group()
+    execution.add_argument(
         "--dry-run",
         action="store_true",
         help="validate inputs and emit local audit metadata without importing OpenAI",
+    )
+    execution.add_argument(
+        "--replay",
+        type=Path,
+        metavar="MANIFEST.json",
+        help="reproduce an exact recorded batch locally without importing OpenAI",
     )
     parser.add_argument(
         "--acknowledge-remote-upload",
@@ -342,7 +360,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI without importing or initializing the provider for help/dry-run."""
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if not args.dry_run:
+    if args.replay is not None:
+        if args.acknowledge_remote_upload:
+            parser.error("--acknowledge-remote-upload cannot be combined with --replay")
+        if args.output is None and not args.stdout:
+            parser.error("replay requires either --output or --stdout")
+    elif not args.dry_run:
         if not args.acknowledge_remote_upload:
             parser.error("--acknowledge-remote-upload is required for live extraction")
         if args.output is None and not args.stdout:
@@ -362,6 +385,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError) as error:
         parser.exit(2, f"input validation failed: {error}\n")
 
+    replay_provider: ReplayProvider | None = None
+    if args.replay is not None:
+        from receipt_extractor.replay import ReplayError, ReplayProvider
+
+        try:
+            replay_provider = ReplayProvider.bind(args.replay, images)
+        except ReplayError:
+            parser.exit(
+                2,
+                "replay validation failed; details are suppressed to avoid "
+                "leaking receipt data\n",
+            )
+
     output: _ReservedOutput | None = None
     try:
         if args.output is not None:
@@ -374,15 +410,36 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "count": len(images),
                 "images": [image.audit_metadata() for image in images],
             }
+        elif replay_provider is not None:
+            try:
+                receipts = process_images(images, replay_provider)
+                replay_provider.finalize()
+            except (TypeError, ValueError):
+                parser.exit(
+                    1,
+                    "replay execution failed; details are suppressed to avoid "
+                    "leaking receipt data\n",
+                )
+            result = {
+                "schema_version": 1,
+                "mode": "replay",
+                "replay_manifest_sha256": replay_provider.manifest_sha256,
+                "receipts": receipts,
+            }
         else:
             try:
-                result = process_images(images, _openai_extract)
+                receipts = process_images(images, _openai_extract)
             except (ProviderExecutionError, TypeError, ValueError):
                 parser.exit(
                     1,
                     "extraction failed; provider details are suppressed to avoid "
                     "leaking receipt data\n",
                 )
+            result = {
+                "schema_version": 1,
+                "mode": "live",
+                "receipts": receipts,
+            }
 
         try:
             serialized = _serialize(result)

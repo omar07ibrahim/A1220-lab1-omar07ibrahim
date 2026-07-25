@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from receipt_extractor import file_io, main, postprocess
+from receipt_extractor import file_io, main, replay
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +33,54 @@ def invoke(*arguments: str) -> CliResult:
         except SystemExit as error:
             code = error.code if isinstance(error.code, int) else 1
     return CliResult(code=code, stdout=stdout.getvalue(), stderr=stderr.getvalue())
+
+
+def write_replay_manifest(
+    path: Path,
+    images: list[file_io.ImagePayload],
+) -> bytes:
+    descriptors = [replay.descriptor_for(image) for image in images]
+    manifest = {
+        "kind": replay.REPLAY_KIND,
+        "schema_version": 1,
+        "batch": {
+            "digest": replay.batch_digest(descriptors),
+            "items": [
+                {
+                    "input": descriptor.model_dump(mode="json"),
+                    "output": {
+                        "date": "2026-07-24",
+                        "amount": f"${index + 1}.25",
+                        "vendor": f"Synthetic Vendor {index + 1}",
+                        "category": "Other",
+                    },
+                }
+                for index, descriptor in enumerate(descriptors)
+            ],
+        },
+    }
+    encoded = json.dumps(
+        manifest,
+        allow_nan=False,
+        ensure_ascii=True,
+        indent=2,
+        sort_keys=True,
+    ).encode("ascii")
+    path.write_bytes(encoded)
+    return encoded
+
+
+def valid_receipt(
+    image: file_io.ImagePayload | None = None,
+    *,
+    amount: str = "$1.00",
+) -> dict[str, Any]:
+    return {
+        "date": "2026-07-24",
+        "amount": amount,
+        "vendor": image.name if image is not None else "Synthetic Vendor",
+        "category": "Other",
+    }
 
 
 def test_help_and_dry_run_do_not_import_provider_or_require_key(
@@ -87,6 +135,155 @@ def test_help_and_dry_run_do_not_import_provider_or_require_key(
     assert dry_run.stderr == ""
 
 
+def test_replay_is_offline_exact_and_byte_deterministic(
+    tmp_path: Path,
+    receipt_dir: Path,
+) -> None:
+    images = file_io.load_images(receipt_dir)
+    manifest = tmp_path / "replay.json"
+    write_replay_manifest(manifest, images)
+    fake_module = tmp_path / "fake-provider"
+    fake_module.mkdir()
+    (fake_module / "openai.py").write_text(
+        "raise AssertionError('OpenAI imported during replay')\n",
+        encoding="utf-8",
+    )
+    repository = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment.pop("OPENAI_API_KEY", None)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(fake_module), str(repository / "src")]
+    )
+    first_output = tmp_path / "first.json"
+    second_output = tmp_path / "second.json"
+
+    outputs: list[bytes] = []
+    for output in (first_output, second_output):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "receipt_extractor.main",
+                str(receipt_dir),
+                "--replay",
+                str(manifest),
+                "--output",
+                str(output),
+            ],
+            cwd=repository,
+            env=environment,
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+        assert completed.returncode == 0
+        assert completed.stdout == b""
+        assert completed.stderr == b""
+        outputs.append(output.read_bytes())
+
+    assert outputs[0] == outputs[1]
+    payload = json.loads(outputs[0])
+    assert payload["schema_version"] == 1
+    assert payload["mode"] == "replay"
+    assert payload["replay_manifest_sha256"].startswith("sha256:")
+    assert list(payload["receipts"]) == ["A.jpg", "b.PNG"]
+    assert [value["amount"] for value in payload["receipts"].values()] == [
+        "$1.25",
+        "$2.25",
+    ]
+
+
+def test_replay_mode_rejects_remote_flags_and_requires_sink(
+    receipt_dir: Path,
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "replay.json"
+    write_replay_manifest(manifest, file_io.load_images(receipt_dir))
+
+    no_sink = invoke(str(receipt_dir), "--replay", str(manifest))
+    remote_ack = invoke(
+        str(receipt_dir),
+        "--replay",
+        str(manifest),
+        "--acknowledge-remote-upload",
+        "--stdout",
+    )
+    conflicting_mode = invoke(
+        str(receipt_dir),
+        "--replay",
+        str(manifest),
+        "--dry-run",
+        "--stdout",
+    )
+
+    assert [no_sink.code, remote_ack.code, conflicting_mode.code] == [2, 2, 2]
+
+
+def test_mismatched_replay_fails_before_output_and_preserves_manifest(
+    receipt_dir: Path,
+    tmp_path: Path,
+) -> None:
+    images = file_io.load_images(receipt_dir)
+    manifest = tmp_path / "replay.json"
+    manifest_bytes = write_replay_manifest(manifest, list(reversed(images)))
+    output = tmp_path / "must-not-exist.json"
+
+    mismatch = invoke(
+        str(receipt_dir),
+        "--replay",
+        str(manifest),
+        "--output",
+        str(output),
+    )
+    same_path = invoke(
+        str(receipt_dir),
+        "--replay",
+        str(manifest),
+        "--output",
+        str(manifest),
+    )
+
+    assert mismatch.code == 2
+    assert "details are suppressed" in mismatch.stderr
+    assert not output.exists()
+    assert same_path.code == 2
+    assert manifest.read_bytes() == manifest_bytes
+
+
+def test_replay_metadata_validation_is_redacted_at_the_cli(
+    receipt_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    [source, *_] = file_io.load_images(receipt_dir)
+    manifest = tmp_path / "replay.json"
+    write_replay_manifest(manifest, [source])
+    invalid = file_io.ImagePayload(
+        name="PRIVATE-METADATA.gif",
+        media_type="image/gif",
+        data=source.data,
+        sha256=source.sha256,
+        width=source.width,
+        height=source.height,
+    )
+    monkeypatch.setattr(file_io, "load_images", lambda *_args, **_kwargs: [invalid])
+    output = tmp_path / "must-not-exist.json"
+
+    result = invoke(
+        str(receipt_dir),
+        "--replay",
+        str(manifest),
+        "--output",
+        str(output),
+    )
+
+    assert result.code == 2
+    assert "replay validation failed; details are suppressed" in result.stderr
+    assert "PRIVATE-METADATA" not in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    assert not output.exists()
+
+
 def test_live_requires_acknowledgement_sink_and_key_before_provider(
     receipt_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -96,7 +293,7 @@ def test_live_requires_acknowledgement_sink_and_key_before_provider(
     def provider(_image: file_io.ImagePayload) -> dict[str, Any]:
         nonlocal calls
         calls += 1
-        return {"amount": "1.00"}
+        return valid_receipt(_image)
 
     monkeypatch.setattr(main, "_openai_extract", provider)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -141,7 +338,7 @@ def test_existing_output_kinds_are_preserved_before_provider(
     def provider(_image: file_io.ImagePayload) -> dict[str, Any]:
         nonlocal calls
         calls += 1
-        return {"amount": "1.00"}
+        return valid_receipt(_image)
 
     monkeypatch.setattr(main, "_openai_extract", provider)
     victim = tmp_path / "victim"
@@ -254,8 +451,11 @@ def test_private_output_is_complete_and_cannot_be_reused(
     assert first_bytes.endswith(b"\n")
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     assert output.stat().st_nlink == 1
+    first_payload = json.loads(first_bytes)
+    assert first_payload["schema_version"] == 1
+    assert first_payload["mode"] == "live"
     assert all(
-        receipt["amount"] == 12.5 for receipt in json.loads(first_bytes).values()
+        receipt["amount"] == "$12.50" for receipt in first_payload["receipts"].values()
     )
     assert second.code == 1
     assert output.read_bytes() == first_bytes
@@ -270,7 +470,7 @@ def test_stdout_is_an_explicit_live_sink(
     monkeypatch.setattr(
         main,
         "_openai_extract",
-        lambda image: {"amount": "3.25", "vendor": image.name},
+        lambda image: valid_receipt(image, amount="$3.25"),
     )
 
     result = invoke(
@@ -280,9 +480,9 @@ def test_stdout_is_an_explicit_live_sink(
     )
 
     assert result.code == 0 and result.stderr == ""
-    assert all(
-        receipt["amount"] == 3.25 for receipt in json.loads(result.stdout).values()
-    )
+    payload = json.loads(result.stdout)
+    assert payload["mode"] == "live"
+    assert all(receipt["amount"] == "$3.25" for receipt in payload["receipts"].values())
 
 
 def test_provider_failure_is_redacted_and_reservation_is_removed(
@@ -329,7 +529,7 @@ def test_second_provider_failure_never_leaves_partial_results(
         calls += 1
         if calls == 2:
             raise main.ProviderExecutionError
-        return {"amount": "5.00"}
+        return valid_receipt(_image, amount="$5.00")
 
     monkeypatch.setattr(main, "_openai_extract", provider)
     result = invoke(
@@ -344,52 +544,52 @@ def test_second_provider_failure_never_leaves_partial_results(
     assert not output.exists()
 
 
-def test_nonfinite_huge_and_unserializable_results_fail_closed(
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {
+            "date": "2026-07-24",
+            "amount": 10**10000,
+            "vendor": "\ud800",
+            "category": "Other",
+        },
+        {
+            "date": "2026-07-24",
+            "amount": "$1.00",
+            "vendor": "Synthetic",
+            "category": "Other",
+            "nested": float("nan"),
+        },
+        {
+            "date": "2026-07-24",
+            "amount": "$1.00",
+            "vendor": "Synthetic",
+            "category": "Other",
+            "nested": object(),
+        },
+    ],
+)
+def test_malformed_provider_results_fail_the_typed_boundary(
     tmp_path: Path,
     receipt_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    invalid: dict[str, Any],
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "offline-sentinel")
-    huge_output = tmp_path / "huge.json"
+    output = tmp_path / "invalid.json"
+    monkeypatch.setattr(main, "_openai_extract", lambda _image: invalid)
 
-    def huge_result(_image: file_io.ImagePayload) -> dict[str, Any]:
-        return {"amount": 10**10000, "vendor": "\ud800"}
-
-    monkeypatch.setattr(main, "_openai_extract", huge_result)
-    huge = invoke(
+    result = invoke(
         str(receipt_dir),
         "--acknowledge-remote-upload",
         "--output",
-        str(huge_output),
+        str(output),
     )
-    huge_payload = json.loads(huge_output.read_text(encoding="ascii"))
-    assert huge.code == 0
-    assert all(
-        value["amount"] is None and value["vendor"] == "\ud800"
-        for value in huge_payload.values()
-    )
-    assert b"\\ud800" in huge_output.read_bytes()
 
-    for index, invalid in enumerate((float("nan"), object())):
-        output = tmp_path / f"invalid-{index}.json"
-
-        def invalid_result(
-            _image: file_io.ImagePayload,
-            value: object = invalid,
-        ) -> dict[str, Any]:
-            return {"amount": "1.00", "nested": value}
-
-        monkeypatch.setattr(main, "_openai_extract", invalid_result)
-        result = invoke(
-            str(receipt_dir),
-            "--acknowledge-remote-upload",
-            "--output",
-            str(output),
-        )
-        assert result.code == 1
-        assert "serialization failed" in result.stderr
-        assert "Traceback" not in result.stderr
-        assert not output.exists()
+    assert result.code == 1
+    assert "provider details are suppressed" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("failure_point", ["fstat", "fchmod"])
@@ -409,7 +609,7 @@ def test_reservation_failures_close_fd_and_remove_path(
     def provider(_image: file_io.ImagePayload) -> dict[str, Any]:
         nonlocal provider_calls
         provider_calls += 1
-        return {"amount": "1.00"}
+        return valid_receipt(_image)
 
     def fail_file_fstat(descriptor: int) -> os.stat_result:
         nonlocal captured_descriptor
@@ -462,7 +662,7 @@ def test_untrusted_parent_rejects_before_provider(
     def provider(_image: file_io.ImagePayload) -> dict[str, Any]:
         nonlocal calls
         calls += 1
-        return {"amount": "1.00"}
+        return valid_receipt(_image)
 
     monkeypatch.setattr(main, "_openai_extract", provider)
     result = invoke(
@@ -513,24 +713,6 @@ def test_unencodable_output_paths_fail_without_traceback(
     assert result.code == 1
     assert "output failed" in result.stderr
     assert "Traceback" not in result.stderr
-
-
-def test_amount_normalization_rejects_nonfinite_and_huge_values() -> None:
-    for amount in (
-        float("nan"),
-        float("inf"),
-        float("-inf"),
-        "NaN",
-        "Infinity",
-        "1e9999",
-        "not-an-amount",
-        10**10000,
-        True,
-        object(),
-    ):
-        assert postprocess.normalize_amount({"amount": amount})["amount"] is None
-    assert postprocess.normalize_amount({"amount": "$ 12.50 "})["amount"] == 12.5
-    assert postprocess.normalize_amount({"amount": None})["amount"] is None
 
 
 def test_make_dry_run_never_expands_key_value() -> None:

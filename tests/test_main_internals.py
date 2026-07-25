@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from receipt_extractor import file_io, gpt, main
-from tests.test_cli import invoke
+from tests.test_cli import invoke, valid_receipt
 
 
 def _changed_stat(details: os.stat_result, *, inode_delta: int = 0) -> os.stat_result:
@@ -25,7 +25,7 @@ def test_process_directory_supports_injected_and_default_adapters(
 
     def extractor(image: file_io.ImagePayload) -> dict[str, Any]:
         calls.append(image.name)
-        return {"amount": "$2.50"}
+        return valid_receipt(image, amount="$2.50")
 
     injected = main.process_directory(receipt_dir, extractor=extractor)
     monkeypatch.setattr(gpt, "extract_receipt_info", extractor)
@@ -33,7 +33,7 @@ def test_process_directory_supports_injected_and_default_adapters(
 
     assert calls == ["A.jpg", "b.PNG", "A.jpg", "b.PNG"]
     assert injected == default
-    assert all(value["amount"] == 2.5 for value in injected.values())
+    assert all(value["amount"] == "$2.50" for value in injected.values())
 
 
 def test_positive_integer_parser_and_direct_dry_run(receipt_dir: Path) -> None:
@@ -59,9 +59,9 @@ def test_openai_boundary_returns_data_and_wraps_exceptions(
     monkeypatch.setattr(
         gpt,
         "extract_receipt_info",
-        lambda _image: {"amount": "4.00"},
+        lambda image: valid_receipt(image, amount="$4.00"),
     )
-    assert main._openai_extract(image) == {"amount": "4.00"}
+    assert main._openai_extract(image) == valid_receipt(image, amount="$4.00")
 
     def fail(_image: file_io.ImagePayload) -> dict[str, Any]:
         raise RuntimeError("provider-private-detail")
@@ -236,7 +236,7 @@ def test_main_reports_output_error_and_cleanup_warning(
     monkeypatch.setattr(
         main,
         "_openai_extract",
-        lambda _image: {"amount": "1.00"},
+        lambda image: valid_receipt(image),
     )
 
     result = invoke(

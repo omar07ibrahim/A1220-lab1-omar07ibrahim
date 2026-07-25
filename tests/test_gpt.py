@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -8,41 +7,27 @@ import pytest
 
 from receipt_extractor import gpt
 from receipt_extractor.file_io import ImagePayload
-
-
-@dataclass(slots=True)
-class _Message:
-    content: str | None
-
-
-@dataclass(slots=True)
-class _Choice:
-    message: _Message
+from receipt_extractor.schema import ExpenseCategory, ReceiptFields
 
 
 @dataclass(slots=True)
 class _Response:
-    choices: list[_Choice]
+    output_parsed: ReceiptFields | None
 
 
-class _Completions:
-    def __init__(self, content: str | None) -> None:
-        self.content = content
+class _Responses:
+    def __init__(self, output_parsed: ReceiptFields | None) -> None:
+        self.output_parsed = output_parsed
         self.calls: list[dict[str, Any]] = []
 
-    def create(self, **kwargs: Any) -> _Response:
+    def parse(self, **kwargs: Any) -> _Response:
         self.calls.append(kwargs)
-        return _Response(choices=[_Choice(message=_Message(self.content))])
-
-
-@dataclass(slots=True)
-class _Chat:
-    completions: _Completions
+        return _Response(output_parsed=self.output_parsed)
 
 
 @dataclass(slots=True)
 class _Client:
-    chat: _Chat
+    responses: _Responses
 
 
 @pytest.fixture
@@ -74,47 +59,70 @@ def test_client_has_bounded_retry_and_timeout(
     assert calls == [{"max_retries": 2, "timeout": 30.0}]
 
 
-def test_adapter_sends_typed_data_url_and_parses_object(
+def test_adapter_sends_typed_responses_request_and_returns_json_values(
     payload: ImagePayload,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    completions = _Completions(
-        '{"date":"2026-07-24","amount":"12.50","vendor":"Synthetic","category":"Other"}'
+    parsed = ReceiptFields(
+        date="2026-07-24",
+        amount="$12.50",
+        vendor="Synthetic",
+        category=ExpenseCategory.OTHER,
     )
-    client = _Client(chat=_Chat(completions=completions))
+    responses = _Responses(parsed)
+    client = _Client(responses=responses)
     monkeypatch.setattr(gpt, "_get_client", lambda: client)
 
     result = gpt.extract_receipt_info(payload)
 
-    assert result["vendor"] == "Synthetic"
-    [call] = completions.calls
-    assert call["model"] == "gpt-4.1-mini"
-    assert call["seed"] == 43
-    assert call["max_completion_tokens"] == 300
-    content = call["messages"][0]["content"]
-    assert "one of [Meals, Transport" in content[0]["text"]
-    assert content[1] == {
-        "type": "image_url",
-        "image_url": {"url": payload.data_url()},
+    assert result == {
+        "date": "2026-07-24",
+        "amount": "$12.50",
+        "vendor": "Synthetic",
+        "category": "Other",
     }
+    [call] = responses.calls
+    assert call == {
+        "model": "gpt-4.1-mini",
+        "instructions": gpt.INSTRUCTIONS,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Extract the receipt fields from this image.",
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": payload.data_url(),
+                        "detail": "high",
+                    },
+                ],
+            }
+        ],
+        "text_format": ReceiptFields,
+        "max_output_tokens": 300,
+        "store": False,
+    }
+    assert "seed" not in call
 
 
-@pytest.mark.parametrize(
-    ("content", "error"),
-    [
-        (None, ValueError),
-        ("[]", TypeError),
-        ("not-json", json.JSONDecodeError),
-    ],
-)
-def test_adapter_rejects_missing_or_nonobject_payloads(
+def test_adapter_rejects_missing_parsed_output_without_fallback(
     payload: ImagePayload,
     monkeypatch: pytest.MonkeyPatch,
-    content: str | None,
-    error: type[Exception],
 ) -> None:
-    client = _Client(chat=_Chat(completions=_Completions(content)))
-    monkeypatch.setattr(gpt, "_get_client", lambda: client)
+    responses = _Responses(None)
+    monkeypatch.setattr(
+        gpt,
+        "_get_client",
+        lambda: _Client(responses=responses),
+    )
 
-    with pytest.raises(error):
+    with pytest.raises(
+        ValueError,
+        match=r"^provider returned no parsed receipt payload$",
+    ):
         gpt.extract_receipt_info(payload)
+
+    assert len(responses.calls) == 1
