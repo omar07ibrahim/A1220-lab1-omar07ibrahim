@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
 import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from PIL import Image
 
 from receipt_extractor import file_io, replay
@@ -65,12 +71,183 @@ def test_replay_evidence_matches_bound_provider_and_raw_manifest_sha() -> None:
     assert _json_object(DEMO / "evidence" / "replay-result.json") == expected
 
 
+def test_failure_fixtures_encode_real_distinct_boundary_cases() -> None:
+    valid = (DEMO / "failures" / "corrupt-batch" / "01-valid.png").read_bytes()
+    corrupt = (DEMO / "failures" / "corrupt-batch" / "02-corrupt.png").read_bytes()
+    images = file_io.load_images(DEMO / "inputs")
+    reversed_manifest, _ = replay.load_manifest(
+        DEMO / "failures" / "reversed-replay-manifest.json"
+    )
+
+    assert valid == (DEMO / "inputs" / "cafe-lumen.png").read_bytes()
+    assert corrupt.startswith(valid)
+    assert corrupt.removeprefix(valid) == b"PK\x03\x04SYNTHETIC-TRAILING-PAYLOAD"
+    assert [item.input.name for item in reversed_manifest.batch.items] == [
+        image.name for image in reversed(images)
+    ]
+    with pytest.raises(
+        file_io.ImageInputError,
+        match="trailing or incomplete container data",
+    ):
+        file_io.load_images(DEMO / "failures" / "corrupt-batch")
+    with pytest.raises(replay.ReplayError, match="does not match the input batch"):
+        replay.ReplayProvider.bind(
+            DEMO / "failures" / "reversed-replay-manifest.json",
+            images,
+        )
+    assert not (DEMO / "failures" / "mismatch-must-not-exist.json").exists()
+    assert _json_object(DEMO / "failures" / "existing-output.json") == {
+        "schema_version": 1,
+        "sentinel": "this synthetic file must never be replaced",
+    }
+    assert (DEMO / "failures" / "provider-sentinel" / "openai.py").read_text(
+        encoding="ascii"
+    ) == ('raise RuntimeError("provider boundary crossed during preflight evidence")\n')
+
+
+def test_failure_evidence_reexecutes_exactly_and_preserves_existing_output(
+    tmp_path: Path,
+) -> None:
+    evidence_path = DEMO / "evidence" / "failure-paths.json"
+    evidence = _json_object(evidence_path)
+    cases = cast(list[dict[str, Any]], evidence["cases"])
+    source_output = DEMO / "failures" / "existing-output.json"
+    source_before = hashlib.sha256(source_output.read_bytes()).hexdigest()
+    scratch_demo = tmp_path / "demo"
+    shutil.copytree(DEMO / "inputs", scratch_demo / "inputs")
+    shutil.copytree(DEMO / "failures", scratch_demo / "failures")
+    shutil.copy2(DEMO / "replay-manifest.json", scratch_demo)
+    existing_output = scratch_demo / "failures" / "existing-output.json"
+    before = hashlib.sha256(existing_output.read_bytes()).hexdigest()
+    logical_commands = {
+        "corrupt-image": (
+            "demo/failures/corrupt-batch",
+            "--acknowledge-remote-upload",
+            "--stdout",
+        ),
+        "batch-file-limit": (
+            "demo/inputs",
+            "--max-files",
+            "1",
+            "--acknowledge-remote-upload",
+            "--stdout",
+        ),
+        "replay-mismatch": (
+            "demo/inputs",
+            "--replay",
+            "demo/failures/reversed-replay-manifest.json",
+            "--output",
+            "demo/failures/mismatch-must-not-exist.json",
+        ),
+        "no-clobber-output": (
+            "demo/inputs",
+            "--replay",
+            "demo/replay-manifest.json",
+            "--output",
+            "demo/failures/existing-output.json",
+        ),
+    }
+    commands = {
+        case_id: tuple(
+            str(scratch_demo / argument.removeprefix("demo/"))
+            if argument.startswith("demo/")
+            else argument
+            for argument in arguments
+        )
+        for case_id, arguments in logical_commands.items()
+    }
+
+    assert evidence["schema_version"] == 1
+    assert evidence["privacy"] == "synthetic fixtures only; no provider request"
+    assert evidence["provider_sentinel"] == (
+        "demo/failures/provider-sentinel/openai.py"
+    )
+    assert [case["id"] for case in cases] == list(logical_commands)
+    evidence_text = evidence_path.read_text(encoding="ascii")
+    for forbidden in (str(REPOSITORY), "/home/", "Traceback", "sk-", "ghp_"):
+        assert forbidden not in evidence_text
+
+    base_environment = os.environ.copy()
+    base_environment.pop("OPENAI_API_KEY", None)
+    base_environment.pop("PYTEST_ADDOPTS", None)
+    base_environment["PYTHONPATH"] = os.pathsep.join(
+        [
+            str(scratch_demo / "failures" / "provider-sentinel"),
+            str(REPOSITORY / "src"),
+        ]
+    )
+    for case in cases:
+        environment = base_environment.copy()
+        case_id = str(case["id"])
+        live_preflight = case_id in {"corrupt-image", "batch-file-limit"}
+        if live_preflight:
+            environment["OPENAI_API_KEY"] = "synthetic-provider-tripwire"
+        prefix = ["PYTHONPATH=demo/failures/provider-sentinel:src"]
+        if live_preflight:
+            prefix.insert(0, "OPENAI_API_KEY=synthetic-provider-tripwire")
+        expected_reproduction = " ".join(
+            [
+                *prefix,
+                shlex.join(
+                    (
+                        "python",
+                        "-m",
+                        "receipt_extractor.main",
+                        *logical_commands[case_id],
+                    )
+                ),
+            ]
+        )
+        assert case["reproduction_command"] == expected_reproduction
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "receipt_extractor.main",
+                *commands[case_id],
+            ],
+            cwd=REPOSITORY,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert completed.returncode == case["exit_code"]
+        assert completed.stdout == case["stdout"] == ""
+        assert completed.stderr == case["stderr"]
+
+    after = hashlib.sha256(existing_output.read_bytes()).hexdigest()
+    source_after = hashlib.sha256(source_output.read_bytes()).hexdigest()
+    preserved = cast(dict[str, str], evidence["preserved_output"])
+    mismatch_output = cast(dict[str, str | bool], evidence["replay_mismatch_output"])
+    assert mismatch_output == {
+        "path": "demo/failures/mismatch-must-not-exist.json",
+        "exists_before": False,
+        "exists_after": False,
+    }
+    assert preserved == {
+        "path": "demo/failures/existing-output.json",
+        "sha256_before": before,
+        "sha256_after": after,
+    }
+    assert after == before
+    assert source_after == source_before == before
+    assert not (scratch_demo / "failures" / "mismatch-must-not-exist.json").exists()
+
+
 def test_expected_evidence_files_exist_and_are_nonempty() -> None:
     expected = (
         DEMO / "evidence" / "coverage-summary.json",
         DEMO / "evidence" / "dry-run.json",
+        DEMO / "evidence" / "failure-paths.json",
         DEMO / "evidence" / "help.txt",
         DEMO / "evidence" / "replay-result.json",
+        DEMO / "failures" / "corrupt-batch" / "01-valid.png",
+        DEMO / "failures" / "corrupt-batch" / "02-corrupt.png",
+        DEMO / "failures" / "existing-output.json",
+        DEMO / "failures" / "provider-sentinel" / "openai.py",
+        DEMO / "failures" / "reversed-replay-manifest.json",
         DEMO / "inputs" / "cafe-lumen.png",
         DEMO / "inputs" / "metro-line.webp",
         DEMO / "replay-manifest.json",
@@ -82,6 +259,7 @@ def test_expected_evidence_files_exist_and_are_nonempty() -> None:
         ASSETS / "coverage.svg",
         ASSETS / "demo-receipts.png",
         ASSETS / "demo.gif",
+        ASSETS / "failure-boundaries.png",
     )
 
     for path in expected:
@@ -98,6 +276,7 @@ def test_raster_evidence_is_really_decodable_png_webp_and_gif() -> None:
         ASSETS / "cli-replay.png": "PNG",
         ASSETS / "coverage.png": "PNG",
         ASSETS / "demo-receipts.png": "PNG",
+        ASSETS / "failure-boundaries.png": "PNG",
         ASSETS / "demo.gif": "GIF",
     }
 
@@ -111,7 +290,7 @@ def test_raster_evidence_is_really_decodable_png_webp_and_gif() -> None:
                 image.seek(frame_index)
                 image.load()
             if expected_format == "GIF":
-                assert frame_count == 5
+                assert frame_count == 6
             else:
                 assert frame_count == 1
             assert "exif" not in image.info
@@ -197,10 +376,13 @@ def test_readme_links_every_reader_facing_visual_and_source_evidence() -> None:
         "docs/assets/coverage.svg",
         "docs/assets/cli-dry-run.png",
         "docs/assets/cli-replay.png",
+        "docs/assets/failure-boundaries.png",
         "demo/inputs",
         "demo/replay-manifest.json",
+        "demo/failures",
         "demo/evidence/help.txt",
         "demo/evidence/dry-run.json",
+        "demo/evidence/failure-paths.json",
         "demo/evidence/replay-result.json",
         "demo/evidence/coverage-summary.json",
         "scripts/capture_demo.py",

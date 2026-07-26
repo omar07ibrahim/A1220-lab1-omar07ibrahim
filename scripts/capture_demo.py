@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -30,6 +35,55 @@ PURPLE = "#a78bfa"
 RECEIPT = "#fffdf7"
 INK = "#172033"
 RECEIPT_MUTED = "#657087"
+
+
+@dataclass(frozen=True, slots=True)
+class _CompletedCommand:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+@dataclass(frozen=True, slots=True)
+class _FailureSpec:
+    id: str
+    title: str
+    logical_arguments: tuple[str, ...]
+    exit_code: int
+    stderr: str
+    invariant: str
+    arm_provider_tripwire: bool = False
+
+
+class _FailureCase(TypedDict):
+    id: str
+    title: str
+    reproduction_command: str
+    exit_code: int
+    stdout: str
+    stderr: str
+    invariant: str
+
+
+class _PreservedOutput(TypedDict):
+    path: str
+    sha256_before: str
+    sha256_after: str
+
+
+class _AbsentOutput(TypedDict):
+    path: str
+    exists_before: bool
+    exists_after: bool
+
+
+class _FailureEvidence(TypedDict):
+    schema_version: int
+    privacy: str
+    provider_sentinel: str
+    cases: list[_FailureCase]
+    replay_mismatch_output: _AbsentOutput
+    preserved_output: _PreservedOutput
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -210,22 +264,27 @@ def _write_json(path: Path, payload: object) -> None:
     )
 
 
-def _run(
+def _execute(
     repository: Path,
     arguments: Sequence[str],
-) -> str:
+    *,
+    pythonpath_prefixes: Sequence[Path] = (),
+    arm_provider_tripwire: bool = False,
+) -> _CompletedCommand:
     environment = os.environ.copy()
     environment.pop("OPENAI_API_KEY", None)
     environment.pop("PYTEST_ADDOPTS", None)
+    if arm_provider_tripwire:
+        environment["OPENAI_API_KEY"] = "synthetic-provider-tripwire"
     environment["COLUMNS"] = "96"
     environment["LINES"] = "30"
     environment["LC_ALL"] = "C.UTF-8"
     environment["PYTHONPATH"] = os.pathsep.join(
         [
+            *(str(path) for path in pythonpath_prefixes),
             str(repository / "src"),
-            environment.get("PYTHONPATH", ""),
         ]
-    ).rstrip(os.pathsep)
+    )
     completed = subprocess.run(
         [sys.executable, "-m", "receipt_extractor.main", *arguments],
         cwd=repository,
@@ -235,12 +294,234 @@ def _run(
         text=True,
         timeout=15,
     )
+    return _CompletedCommand(
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+def _run(
+    repository: Path,
+    arguments: Sequence[str],
+) -> str:
+    completed = _execute(repository, arguments)
     if completed.returncode != 0 or completed.stderr:
         raise RuntimeError(
             f"demo command failed with status {completed.returncode}; "
             "stderr intentionally suppressed"
         )
     return completed.stdout
+
+
+def _actual_arguments(
+    demo_dir: Path,
+    logical_arguments: Sequence[str],
+) -> tuple[str, ...]:
+    return tuple(
+        str(demo_dir / argument.removeprefix("demo/"))
+        if argument.startswith("demo/")
+        else argument
+        for argument in logical_arguments
+    )
+
+
+def _reproduction_command(spec: _FailureSpec) -> str:
+    environment = ["PYTHONPATH=demo/failures/provider-sentinel:src"]
+    if spec.arm_provider_tripwire:
+        environment.insert(0, "OPENAI_API_KEY=synthetic-provider-tripwire")
+    invocation = shlex.join(
+        ("python", "-m", "receipt_extractor.main", *spec.logical_arguments)
+    )
+    return " ".join((*environment, invocation))
+
+
+def _capture_failure_evidence(
+    *,
+    repository: Path,
+    demo_dir: Path,
+    input_dir: Path,
+    images: Sequence[file_io.ImagePayload],
+) -> _FailureEvidence:
+    failure_dir = demo_dir / "failures"
+    corrupt_dir = failure_dir / "corrupt-batch"
+    provider_sentinel = failure_dir / "provider-sentinel"
+    corrupt_dir.mkdir(parents=True, exist_ok=True)
+    provider_sentinel.mkdir(parents=True, exist_ok=True)
+
+    valid_png = (input_dir / "cafe-lumen.png").read_bytes()
+    (corrupt_dir / "01-valid.png").write_bytes(valid_png)
+    (corrupt_dir / "02-corrupt.png").write_bytes(
+        valid_png + b"PK\x03\x04SYNTHETIC-TRAILING-PAYLOAD"
+    )
+    (provider_sentinel / "openai.py").write_text(
+        'raise RuntimeError("provider boundary crossed during preflight evidence")\n',
+        encoding="ascii",
+    )
+
+    reversed_manifest = failure_dir / "reversed-replay-manifest.json"
+    _write_json(reversed_manifest, _manifest_document(list(reversed(images))))
+    existing_output = failure_dir / "existing-output.json"
+    _write_json(
+        existing_output,
+        {
+            "schema_version": 1,
+            "sentinel": "this synthetic file must never be replaced",
+        },
+    )
+    tracked_preserved_sha = hashlib.sha256(existing_output.read_bytes()).hexdigest()
+    tracked_mismatch_output = failure_dir / "mismatch-must-not-exist.json"
+    if tracked_mismatch_output.exists():
+        raise RuntimeError("the replay-mismatch output path must start absent")
+
+    specs = (
+        _FailureSpec(
+            id="corrupt-image",
+            title="Trailing payload",
+            logical_arguments=(
+                "demo/failures/corrupt-batch",
+                "--acknowledge-remote-upload",
+                "--stdout",
+            ),
+            exit_code=2,
+            stderr=(
+                "input validation failed: an input image has trailing or "
+                "incomplete container data\n"
+            ),
+            invariant=(
+                "A valid first member plus one appended-payload PNG rejects "
+                "the whole live batch before provider import."
+            ),
+            arm_provider_tripwire=True,
+        ),
+        _FailureSpec(
+            id="batch-file-limit",
+            title="Batch limit",
+            logical_arguments=(
+                "demo/inputs",
+                "--max-files",
+                "1",
+                "--acknowledge-remote-upload",
+                "--stdout",
+            ),
+            exit_code=2,
+            stderr=(
+                "input validation failed: input images exceed the file-count limit\n"
+            ),
+            invariant=(
+                "The live path returns no partial prefix when the complete "
+                "batch exceeds its cap."
+            ),
+            arm_provider_tripwire=True,
+        ),
+        _FailureSpec(
+            id="replay-mismatch",
+            title="Replay mismatch",
+            logical_arguments=(
+                "demo/inputs",
+                "--replay",
+                "demo/failures/reversed-replay-manifest.json",
+                "--output",
+                "demo/failures/mismatch-must-not-exist.json",
+            ),
+            exit_code=2,
+            stderr=(
+                "replay validation failed; details are suppressed to avoid "
+                "leaking receipt data\n"
+            ),
+            invariant="A valid manifest for the wrong order is rejected and redacted.",
+        ),
+        _FailureSpec(
+            id="no-clobber-output",
+            title="No-clobber sink",
+            logical_arguments=(
+                "demo/inputs",
+                "--replay",
+                "demo/replay-manifest.json",
+                "--output",
+                "demo/failures/existing-output.json",
+            ),
+            exit_code=1,
+            stderr=(
+                "output failed: the output path already exists; "
+                "refusing to replace it\n"
+            ),
+            invariant="The existing sink remains byte-for-byte unchanged.",
+        ),
+    )
+
+    scratch_parent = repository / ".venv" / "evidence-scratch"
+    scratch_parent.mkdir(parents=True, exist_ok=True)
+    cases: list[_FailureCase] = []
+    with tempfile.TemporaryDirectory(
+        prefix="receipt-failures-",
+        dir=scratch_parent,
+    ) as temporary:
+        scratch_demo = Path(temporary) / "demo"
+        shutil.copytree(input_dir, scratch_demo / "inputs")
+        shutil.copytree(failure_dir, scratch_demo / "failures")
+        shutil.copy2(demo_dir / "replay-manifest.json", scratch_demo)
+        scratch_provider = scratch_demo / "failures" / "provider-sentinel"
+        scratch_existing = scratch_demo / "failures" / "existing-output.json"
+        mismatch_output = scratch_demo / "failures" / "mismatch-must-not-exist.json"
+        preserved_before = hashlib.sha256(scratch_existing.read_bytes()).hexdigest()
+        mismatch_existed_before = mismatch_output.exists()
+        if preserved_before != tracked_preserved_sha or mismatch_existed_before:
+            raise RuntimeError("failure evidence scratch inputs do not match fixtures")
+
+        for spec in specs:
+            completed = _execute(
+                repository,
+                _actual_arguments(scratch_demo, spec.logical_arguments),
+                pythonpath_prefixes=(scratch_provider,),
+                arm_provider_tripwire=spec.arm_provider_tripwire,
+            )
+            if (
+                completed.returncode != spec.exit_code
+                or completed.stdout
+                or completed.stderr != spec.stderr
+            ):
+                raise RuntimeError(
+                    f"failure evidence drifted for {spec.id}; "
+                    "captured details intentionally suppressed"
+                )
+            cases.append(
+                {
+                    "id": spec.id,
+                    "title": spec.title,
+                    "reproduction_command": _reproduction_command(spec),
+                    "exit_code": completed.returncode,
+                    "stdout": completed.stdout,
+                    "stderr": completed.stderr,
+                    "invariant": spec.invariant,
+                }
+            )
+
+        preserved_after = hashlib.sha256(scratch_existing.read_bytes()).hexdigest()
+        mismatch_exists_after = mismatch_output.exists()
+        if preserved_after != preserved_before:
+            raise RuntimeError(
+                "the no-clobber failure case changed its existing output"
+            )
+        if mismatch_exists_after:
+            raise RuntimeError("replay mismatch reserved an output before rejecting")
+
+    return {
+        "schema_version": 1,
+        "privacy": "synthetic fixtures only; no provider request",
+        "provider_sentinel": "demo/failures/provider-sentinel/openai.py",
+        "cases": cases,
+        "replay_mismatch_output": {
+            "path": "demo/failures/mismatch-must-not-exist.json",
+            "exists_before": mismatch_existed_before,
+            "exists_after": mismatch_exists_after,
+        },
+        "preserved_output": {
+            "path": "demo/failures/existing-output.json",
+            "sha256_before": preserved_before,
+            "sha256_after": preserved_after,
+        },
+    }
 
 
 def _wrapped_lines(text: str, *, width: int = 112) -> list[str]:
@@ -299,6 +580,102 @@ def _terminal_capture(
         color = CYAN if line.lstrip().startswith(("{", "}", "[", "]")) else TEXT
         draw.text((58, y), line, font=_font(20), fill=color)
         y += line_height
+    return image
+
+
+def _failure_gallery(evidence: _FailureEvidence) -> Image.Image:
+    width, height = 1440, 1220
+    image = Image.new("RGB", (width, height), CANVAS)
+    draw = ImageDraw.Draw(image)
+    draw.text((64, 48), "Actual fail-closed CLI boundaries", font=_font(42), fill=TEXT)
+    draw.text(
+        (66, 106),
+        (
+            "Recorded CLI streams with normalized reproduction commands and "
+            "synthetic fixtures."
+        ),
+        font=_font(22),
+        fill=MUTED,
+    )
+
+    panel_width = 638
+    panel_height = 452
+    for index, case in enumerate(evidence["cases"]):
+        column = index % 2
+        row = index // 2
+        x = 64 + column * 674
+        y = 164 + row * 486
+        draw.rounded_rectangle(
+            (x, y, x + panel_width, y + panel_height),
+            radius=24,
+            fill=PANEL,
+            outline="#293653",
+            width=2,
+        )
+        draw.text((x + 28, y + 24), case["title"], font=_font(27), fill=TEXT)
+        badge = f"exit {case['exit_code']}"
+        badge_width = _text_width(draw, badge, size=19) + 32
+        draw.rounded_rectangle(
+            (x + panel_width - badge_width - 24, y + 22, x + panel_width - 24, y + 60),
+            radius=14,
+            fill="#3b2230",
+            outline=RED,
+            width=2,
+        )
+        draw.text(
+            (x + panel_width - badge_width - 8, y + 31),
+            badge,
+            font=_font(19),
+            fill=RED,
+        )
+        draw.text((x + 28, y + 76), case["id"], font=_font(16), fill=CYAN)
+
+        cursor = y + 114
+        for line in _wrapped_lines(case["invariant"], width=55):
+            draw.text((x + 28, cursor), line, font=_font(18), fill=MUTED)
+            cursor += 24
+        cursor += 12
+        draw.text(
+            (x + 28, cursor),
+            "$ reproduction command",
+            font=_font(17),
+            fill=GREEN,
+        )
+        cursor += 27
+        for line in _wrapped_lines(case["reproduction_command"], width=55):
+            draw.text((x + 28, cursor), line, font=_font(17), fill=GREEN)
+            cursor += 23
+        cursor += 12
+        draw.text((x + 28, cursor), "stderr", font=_font(17), fill=AMBER)
+        cursor += 27
+        for line in _wrapped_lines(case["stderr"], width=55):
+            draw.text((x + 28, cursor), line, font=_font(17), fill=TEXT)
+            cursor += 23
+        draw.text(
+            (x + 28, y + panel_height - 42),
+            "stdout: empty",
+            font=_font(16),
+            fill=MUTED,
+        )
+
+    mismatch = evidence["replay_mismatch_output"]
+    preserved = evidence["preserved_output"]
+    mismatch_absent = not mismatch["exists_before"] and not mismatch["exists_after"]
+    draw.text(
+        (66, 1146),
+        (
+            "Replay mismatch output absent before and after: "
+            f"{str(mismatch_absent).lower()}"
+        ),
+        font=_font(19),
+        fill=GREEN,
+    )
+    draw.text(
+        (66, 1179),
+        (f"No-clobber SHA-256 before = after: {preserved['sha256_after'][:16]}…"),
+        font=_font(19),
+        fill=GREEN,
+    )
     return image
 
 
@@ -663,6 +1040,7 @@ def _save_assets(
     dry_run_output: str,
     replay_output: str,
     coverage: dict[str, Any],
+    failures: _FailureEvidence,
 ) -> None:
     asset_dir.mkdir(parents=True, exist_ok=True)
     montage = _receipt_montage(input_dir)
@@ -687,6 +1065,7 @@ def _save_assets(
         output=replay_output,
     )
     coverage_image = _coverage_png(coverage)
+    failure_image = _failure_gallery(failures)
 
     raster_assets = {
         "demo-receipts.png": montage,
@@ -694,6 +1073,7 @@ def _save_assets(
         "cli-dry-run.png": dry_capture,
         "cli-replay.png": replay_capture,
         "coverage.png": coverage_image,
+        "failure-boundaries.png": failure_image,
     }
     for name, image in raster_assets.items():
         image.save(asset_dir / name, format="PNG", compress_level=9)
@@ -707,18 +1087,19 @@ def _save_assets(
         encoding="utf-8",
     )
     frames = [
-        _gif_frame(montage, label="1 / 5  Generate explicit synthetic receipts"),
-        _gif_frame(help_capture, label="2 / 5  Inspect the real CLI contract"),
-        _gif_frame(dry_capture, label="3 / 5  Preflight every input locally"),
-        _gif_frame(replay_capture, label="4 / 5  Reproduce the exact batch offline"),
-        _gif_frame(coverage_image, label="5 / 5  Verify the complete offline gate"),
+        _gif_frame(montage, label="1 / 6  Generate explicit synthetic receipts"),
+        _gif_frame(help_capture, label="2 / 6  Inspect the real CLI contract"),
+        _gif_frame(dry_capture, label="3 / 6  Preflight every input locally"),
+        _gif_frame(replay_capture, label="4 / 6  Reproduce the exact batch offline"),
+        _gif_frame(failure_image, label="5 / 6  Exercise fail-closed boundaries"),
+        _gif_frame(coverage_image, label="6 / 6  Verify the complete offline gate"),
     ]
     frames[0].save(
         asset_dir / "demo.gif",
         format="GIF",
         save_all=True,
         append_images=frames[1:],
-        duration=(2200, 2200, 2700, 3000, 2600),
+        duration=(2200, 2200, 2700, 3000, 3000, 2600),
         loop=0,
         disposal=2,
         optimize=False,
@@ -739,6 +1120,12 @@ def capture(
     images = file_io.load_images(input_dir)
     manifest_path = demo_dir / "replay-manifest.json"
     _write_json(manifest_path, _manifest_document(images))
+    failures = _capture_failure_evidence(
+        repository=repository,
+        demo_dir=demo_dir,
+        input_dir=input_dir,
+        images=images,
+    )
 
     help_output = _run(repository, ["--help"])
     dry_run_output = _run(repository, [str(input_dir), "--dry-run"])
@@ -758,6 +1145,7 @@ def capture(
         replay_output,
         encoding="ascii",
     )
+    _write_json(evidence_dir / "failure-paths.json", failures)
 
     coverage = _coverage_summary(
         coverage_path,
@@ -771,6 +1159,7 @@ def capture(
         dry_run_output=dry_run_output,
         replay_output=replay_output,
         coverage=coverage,
+        failures=failures,
     )
 
 

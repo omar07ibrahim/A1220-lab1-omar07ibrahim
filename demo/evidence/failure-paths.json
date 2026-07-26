@@ -1,0 +1,53 @@
+{
+  "cases": [
+    {
+      "exit_code": 2,
+      "id": "corrupt-image",
+      "invariant": "A valid first member plus one appended-payload PNG rejects the whole live batch before provider import.",
+      "reproduction_command": "OPENAI_API_KEY=synthetic-provider-tripwire PYTHONPATH=demo/failures/provider-sentinel:src python -m receipt_extractor.main demo/failures/corrupt-batch --acknowledge-remote-upload --stdout",
+      "stderr": "input validation failed: an input image has trailing or incomplete container data\n",
+      "stdout": "",
+      "title": "Trailing payload"
+    },
+    {
+      "exit_code": 2,
+      "id": "batch-file-limit",
+      "invariant": "The live path returns no partial prefix when the complete batch exceeds its cap.",
+      "reproduction_command": "OPENAI_API_KEY=synthetic-provider-tripwire PYTHONPATH=demo/failures/provider-sentinel:src python -m receipt_extractor.main demo/inputs --max-files 1 --acknowledge-remote-upload --stdout",
+      "stderr": "input validation failed: input images exceed the file-count limit\n",
+      "stdout": "",
+      "title": "Batch limit"
+    },
+    {
+      "exit_code": 2,
+      "id": "replay-mismatch",
+      "invariant": "A valid manifest for the wrong order is rejected and redacted.",
+      "reproduction_command": "PYTHONPATH=demo/failures/provider-sentinel:src python -m receipt_extractor.main demo/inputs --replay demo/failures/reversed-replay-manifest.json --output demo/failures/mismatch-must-not-exist.json",
+      "stderr": "replay validation failed; details are suppressed to avoid leaking receipt data\n",
+      "stdout": "",
+      "title": "Replay mismatch"
+    },
+    {
+      "exit_code": 1,
+      "id": "no-clobber-output",
+      "invariant": "The existing sink remains byte-for-byte unchanged.",
+      "reproduction_command": "PYTHONPATH=demo/failures/provider-sentinel:src python -m receipt_extractor.main demo/inputs --replay demo/replay-manifest.json --output demo/failures/existing-output.json",
+      "stderr": "output failed: the output path already exists; refusing to replace it\n",
+      "stdout": "",
+      "title": "No-clobber sink"
+    }
+  ],
+  "preserved_output": {
+    "path": "demo/failures/existing-output.json",
+    "sha256_after": "bc9a7fa186720d35484fff496356e976846f357d235e4e6baad37214d7683e29",
+    "sha256_before": "bc9a7fa186720d35484fff496356e976846f357d235e4e6baad37214d7683e29"
+  },
+  "privacy": "synthetic fixtures only; no provider request",
+  "provider_sentinel": "demo/failures/provider-sentinel/openai.py",
+  "replay_mismatch_output": {
+    "exists_after": false,
+    "exists_before": false,
+    "path": "demo/failures/mismatch-must-not-exist.json"
+  },
+  "schema_version": 1
+}

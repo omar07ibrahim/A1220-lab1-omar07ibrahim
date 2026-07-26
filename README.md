@@ -10,11 +10,11 @@ reviewable commits into a document-intelligence project with bounded inputs,
 typed outputs, deterministic replay, and evidence that does not rely on private
 receipts.
 
-![Five-step synthetic receipt demo: generate, inspect, preflight, replay, and verify](docs/assets/demo.gif)
+![Six-step synthetic receipt demo: generate, inspect, preflight, replay, reject unsafe cases, and verify](docs/assets/demo.gif)
 
 The animation above is rebuilt from the current source, generated fixtures,
-captured CLI stdout, and coverage.py data. It is not a recording of a model
-call.
+captured CLI streams, and coverage.py data. It is not a recording of a model
+call, and the failure frame contains only deliberately synthetic cases.
 
 ## What works today
 
@@ -80,7 +80,7 @@ make check
 
 `make audit` is intentionally separate because dependency-advisory lookup is a
 networked operation. The regular gate uses generated images and fake providers;
-it makes no model request. The current gate is 121 tests with 91% combined
+it makes no model request. The current gate is 123 tests with 91% combined
 statement and branch coverage.
 
 ![Coverage generated from the current coverage.py JSON](docs/assets/coverage.svg)
@@ -226,6 +226,38 @@ PYTHONPATH=src python -m receipt_extractor.main receipts \
   --stdout
 ```
 
+## Observed failure boundaries
+
+The demo generator executes four expected failures through the production CLI,
+requires exact exit codes and streams, and renders the results without
+inventing terminal output:
+
+![Actual CLI output for trailing-payload, batch-limit, replay-mismatch, and no-clobber failures](docs/assets/failure-boundaries.png)
+
+- **Trailing payload:** a valid generated PNG with appended bytes is rejected
+  after full image decoding because its container boundary is no longer exact.
+- **Batch limit:** two valid inputs with `--max-files 1` produce no partial
+  result.
+- **Replay mismatch:** an internally valid manifest for the reversed input
+  order is rejected while a new result path remains absent before and after.
+- **No clobber:** replay cannot replace a pre-existing JSON sentinel; its
+  SHA-256 is identical before and after the command.
+
+The first two cases enter live mode with a visibly synthetic environment
+sentinel and put a poison `openai.py` first on `PYTHONPATH`. Reaching provider
+import before complete preflight would therefore fail with the wrong stream and
+invalidate generation. No provider request is made.
+
+The exact ledger is
+[`demo/evidence/failure-paths.json`](demo/evidence/failure-paths.json), and all
+inputs are under [`demo/failures/`](demo/failures). The annotations in the PNG
+state the checked invariant. Exit code, stdout, and stderr come from the
+recorded subprocess; each normalized reproduction command is derived from the
+same logical arguments and environment flags without exposing the generator's
+temporary absolute paths or interpreter location. Generation executes against
+private scratch copies under `.venv`, so a future no-clobber regression cannot
+damage the tracked sentinel while it is being detected.
+
 ## Bounded threat model
 
 | Boundary | Enforced | Not claimed |
@@ -251,9 +283,12 @@ exact help transcript is also available as
 2. loads them through `file_io.load_images`;
 3. builds the canonical exact-batch manifest;
 4. executes the real help, dry-run, and replay commands with no API key;
-5. captures the exact text outputs;
-6. reads coverage.py JSON from the full test run;
-7. renders the terminal captures, diagrams, chart, and GIF.
+5. executes four expected failures, including live preflight guarded by a
+   poison provider import;
+6. records exact streams, normalized reproduction commands, output absence,
+   and no-clobber hashes;
+7. reads coverage.py JSON from the full test run;
+8. renders the terminal captures, diagrams, chart, failure gallery, and GIF.
 
 Regenerate the tracked artifacts:
 
@@ -285,7 +320,8 @@ scripts/
   capture_demo.py  # fixtures, real CLI captures, diagrams, chart, and GIF
 demo/
   inputs/          # visibly synthetic PNG and lossless WebP receipts
-  evidence/        # exact captured stdout plus coverage summary
+  failures/        # corrupt batch, reversed manifest, provider tripwire, sink
+  evidence/        # exact CLI streams, failure ledger, and coverage summary
   replay-manifest.json
 docs/assets/       # generated README visuals; checked by make demo-check
 tests/
