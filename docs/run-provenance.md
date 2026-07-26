@@ -1,6 +1,7 @@
 # Content-addressed replay run provenance
 
-Status: design contract; no run bundle or verifier is implemented yet.
+Status: core schema, CLI bundle creation, and offline verification are
+implemented; reproducible synthetic evidence is the remaining milestone.
 
 The existing replay manifest answers a pre-execution question:
 

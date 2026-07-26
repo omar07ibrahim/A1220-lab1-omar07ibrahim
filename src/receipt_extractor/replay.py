@@ -209,6 +209,17 @@ class ReplayProvider:
 
     @classmethod
     def bind(cls, path: Path, images: Sequence[ImagePayload]) -> ReplayProvider:
+        """Bind a provider while preserving the original public return type."""
+        provider, _ = cls.bind_with_manifest(path, images)
+        return provider
+
+    @classmethod
+    def bind_with_manifest(
+        cls,
+        path: Path,
+        images: Sequence[ImagePayload],
+    ) -> tuple[ReplayProvider, ReplayManifest]:
+        """Bind once and return the exact validated manifest used by the provider."""
         manifest, manifest_sha256 = load_manifest(path)
         actual = [descriptor_for(image) for image in images]
         expected = [item.input for item in manifest.batch.items]
@@ -217,9 +228,12 @@ class ReplayProvider:
             manifest.batch.digest,
         ):
             raise ReplayError("the replay manifest does not match the input batch")
-        return cls(
-            items=tuple(manifest.batch.items),
-            manifest_sha256=manifest_sha256,
+        return (
+            cls(
+                items=tuple(manifest.batch.items),
+                manifest_sha256=manifest_sha256,
+            ),
+            manifest,
         )
 
     def __call__(self, image: ImagePayload) -> dict[str, Any]:

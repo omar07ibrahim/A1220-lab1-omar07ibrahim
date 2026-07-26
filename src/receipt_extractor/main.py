@@ -17,7 +17,7 @@ from receipt_extractor import file_io
 from receipt_extractor.schema import ReceiptFields
 
 if TYPE_CHECKING:
-    from receipt_extractor.replay import ReplayProvider
+    from receipt_extractor.replay import ReplayManifest, ReplayProvider
 
 Extractor = Callable[[file_io.ImagePayload], dict[str, Any]]
 
@@ -134,7 +134,18 @@ def process_images(
     extractor: Extractor,
 ) -> dict[str, dict[str, Any]]:
     """Extract and normalize an already validated image batch."""
-    results: dict[str, dict[str, Any]] = {}
+    return {
+        name: receipt.model_dump(mode="json")
+        for name, receipt in _materialize_images(images, extractor)
+    }
+
+
+def _materialize_images(
+    images: Sequence[file_io.ImagePayload],
+    extractor: Extractor,
+) -> tuple[tuple[str, ReceiptFields], ...]:
+    """Materialize one ordered batch through the shared strict JSON boundary."""
+    results: list[tuple[str, ReceiptFields]] = []
     for image in images:
         data = extractor(image)
         encoded = json.dumps(
@@ -144,8 +155,8 @@ def process_images(
             separators=(",", ":"),
         )
         receipt = ReceiptFields.model_validate_json(encoded, strict=True)
-        results[image.name] = receipt.model_dump(mode="json")
-    return results
+        results.append((image.name, receipt))
+    return tuple(results)
 
 
 def process_directory(
@@ -197,6 +208,18 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="MANIFEST.json",
         help="reproduce an exact recorded batch locally without importing OpenAI",
     )
+    execution.add_argument(
+        "--verify-run",
+        type=Path,
+        metavar="RUN.json",
+        help="verify a replay run locally without importing OpenAI",
+    )
+    parser.add_argument(
+        "--against-manifest",
+        type=Path,
+        metavar="MANIFEST.json",
+        help="exact replay manifest file required by --verify-run",
+    )
     parser.add_argument(
         "--acknowledge-remote-upload",
         action="store_true",
@@ -232,6 +255,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="stdout",
         action="store_true",
         help="explicitly emit extracted receipt fields to stdout",
+    )
+    destination.add_argument(
+        "--run-output",
+        type=Path,
+        metavar="RUN.json",
+        help="reserve one private content-addressed replay run bundle",
     )
     return parser
 
@@ -360,11 +389,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI without importing or initializing the provider for help/dry-run."""
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.replay is not None:
+    against_manifest: Path | None = args.against_manifest
+    if args.verify_run is not None:
+        if against_manifest is None:
+            parser.error("--verify-run requires --against-manifest")
+        if args.acknowledge_remote_upload:
+            parser.error(
+                "--acknowledge-remote-upload cannot be combined with --verify-run"
+            )
+        if args.output is not None or args.stdout or args.run_output is not None:
+            parser.error("--verify-run does not accept an output sink")
+    elif against_manifest is not None:
+        parser.error("--against-manifest is only valid with --verify-run")
+    elif args.replay is not None:
         if args.acknowledge_remote_upload:
             parser.error("--acknowledge-remote-upload cannot be combined with --replay")
-        if args.output is None and not args.stdout:
-            parser.error("replay requires either --output or --stdout")
+        if args.output is None and not args.stdout and args.run_output is None:
+            parser.error("replay requires --output, --stdout, or --run-output")
+    elif args.run_output is not None:
+        parser.error("--run-output is only valid with --replay")
     elif not args.dry_run:
         if not args.acknowledge_remote_upload:
             parser.error("--acknowledge-remote-upload is required for live extraction")
@@ -383,14 +426,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_total_bytes=max_total_bytes,
         )
     except (OSError, ValueError) as error:
+        if args.verify_run is not None:
+            parser.exit(
+                2,
+                "run verification failed; details are suppressed to avoid "
+                "leaking receipt data\n",
+            )
         parser.exit(2, f"input validation failed: {error}\n")
 
     replay_provider: ReplayProvider | None = None
+    replay_manifest: ReplayManifest | None = None
     if args.replay is not None:
         from receipt_extractor.replay import ReplayError, ReplayProvider
 
         try:
-            replay_provider = ReplayProvider.bind(args.replay, images)
+            replay_provider, replay_manifest = ReplayProvider.bind_with_manifest(
+                args.replay,
+                images,
+            )
         except ReplayError:
             parser.exit(
                 2,
@@ -398,13 +451,48 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "leaking receipt data\n",
             )
 
+    if args.verify_run is not None:
+        if against_manifest is None:  # pragma: no cover - guarded before preflight
+            parser.error("--verify-run requires --against-manifest")
+        from receipt_extractor.provenance import (
+            ProvenanceError,
+            load_replay_run,
+            verify_replay_run,
+        )
+        from receipt_extractor.replay import ReplayError, descriptor_for, load_manifest
+
+        try:
+            manifest, manifest_sha256 = load_manifest(against_manifest)
+            run = load_replay_run(args.verify_run)
+            descriptors = tuple(descriptor_for(image) for image in images)
+            verify_replay_run(
+                run=run,
+                manifest=manifest,
+                manifest_file_sha256=manifest_sha256,
+                descriptors=descriptors,
+            )
+        except (ProvenanceError, ReplayError, TypeError, ValueError):
+            parser.exit(
+                2,
+                "run verification failed; details are suppressed to avoid "
+                "leaking receipt data\n",
+            )
+
     output: _ReservedOutput | None = None
     try:
-        if args.output is not None:
-            output = _reserve_private_output(args.output)
+        output_path = args.output if args.output is not None else args.run_output
+        if output_path is not None:
+            output = _reserve_private_output(output_path)
 
-        if args.dry_run:
-            result: dict[str, Any] = {
+        result: dict[str, Any]
+        if args.verify_run is not None:
+            result = {
+                "mode": "verify-run",
+                "schema_version": 1,
+                "verified": True,
+            }
+        elif args.dry_run:
+            result = {
                 "schema_version": 1,
                 "mode": "dry-run",
                 "count": len(images),
@@ -412,7 +500,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         elif replay_provider is not None:
             try:
-                receipts = process_images(images, replay_provider)
+                materialized = _materialize_images(images, replay_provider)
                 replay_provider.finalize()
             except (TypeError, ValueError):
                 parser.exit(
@@ -420,12 +508,41 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "replay execution failed; details are suppressed to avoid "
                     "leaking receipt data\n",
                 )
-            result = {
-                "schema_version": 1,
-                "mode": "replay",
-                "replay_manifest_sha256": replay_provider.manifest_sha256,
-                "receipts": receipts,
-            }
+            if args.run_output is not None:
+                from receipt_extractor.provenance import (
+                    ProvenanceError,
+                    build_replay_run,
+                )
+
+                if replay_manifest is None:
+                    parser.exit(
+                        1,
+                        "replay execution failed; details are suppressed to avoid "
+                        "leaking receipt data\n",
+                    )
+                try:
+                    run = build_replay_run(
+                        manifest=replay_manifest,
+                        manifest_file_sha256=replay_provider.manifest_sha256,
+                        materialized_items=materialized,
+                    )
+                except ProvenanceError:
+                    parser.exit(
+                        1,
+                        "replay execution failed; details are suppressed to avoid "
+                        "leaking receipt data\n",
+                    )
+                result = run.model_dump(mode="json")
+            else:
+                result = {
+                    "schema_version": 1,
+                    "mode": "replay",
+                    "replay_manifest_sha256": replay_provider.manifest_sha256,
+                    "receipts": {
+                        name: receipt.model_dump(mode="json")
+                        for name, receipt in materialized
+                    },
+                }
         else:
             try:
                 receipts = process_images(images, _openai_extract)
