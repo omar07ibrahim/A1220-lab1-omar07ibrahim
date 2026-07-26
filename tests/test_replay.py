@@ -10,6 +10,8 @@ from typing import Any
 
 import pytest
 
+import receipt_extractor.replay as replay
+from receipt_extractor.artifact_io import ArtifactIOErrorCode
 from receipt_extractor.file_io import DEFAULT_MAX_FILE_BYTES, ImagePayload
 from receipt_extractor.replay import (
     MAX_REPLAY_BYTES,
@@ -394,6 +396,24 @@ def test_empty_and_oversized_manifests_are_rejected(
 
     with pytest.raises(ReplayError, match="bounded single-link regular file"):
         load_manifest(path)
+
+
+def test_invalid_internal_size_limit_is_a_stable_replay_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(replay, "MAX_REPLAY_BYTES", True)
+
+    with pytest.raises(ReplayError) as captured:
+        load_manifest(path)
+
+    assert str(captured.value) == "the replay manifest size limit is invalid"
+
+
+def test_every_shared_artifact_error_has_a_replay_translation() -> None:
+    assert set(replay._ARTIFACT_ERROR_MESSAGES) == set(ArtifactIOErrorCode)
 
 
 def test_suffix_and_parent_traversal_are_rejected(
