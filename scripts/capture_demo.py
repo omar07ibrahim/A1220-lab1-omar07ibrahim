@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,73 @@ PURPLE = "#a78bfa"
 RECEIPT = "#fffdf7"
 INK = "#172033"
 RECEIPT_MUTED = "#657087"
+
+EXPECTED_DEMO_FILES = (
+    "demo/evidence/coverage-summary.json",
+    "demo/evidence/dry-run.json",
+    "demo/evidence/failure-paths.json",
+    "demo/evidence/help.txt",
+    "demo/evidence/provenance-source.json",
+    "demo/evidence/replay-result.json",
+    "demo/evidence/replay-run.json",
+    "demo/evidence/run-verification.json",
+    "demo/failures/corrupt-batch/01-valid.png",
+    "demo/failures/corrupt-batch/02-corrupt.png",
+    "demo/failures/existing-output.json",
+    "demo/failures/provider-sentinel/openai.py",
+    "demo/failures/reversed-replay-manifest.json",
+    "demo/inputs/cafe-lumen.png",
+    "demo/inputs/metro-line.webp",
+    "demo/replay-manifest.json",
+)
+EXPECTED_ASSET_FILES = (
+    "docs/assets/architecture.svg",
+    "docs/assets/cli-dry-run.png",
+    "docs/assets/cli-help.png",
+    "docs/assets/cli-provenance.png",
+    "docs/assets/cli-replay.png",
+    "docs/assets/coverage.png",
+    "docs/assets/coverage.svg",
+    "docs/assets/demo-receipts.png",
+    "docs/assets/demo.gif",
+    "docs/assets/failure-boundaries.png",
+    "docs/assets/provenance-bindings.svg",
+)
+EXPECTED_GENERATED_FILES = tuple(sorted((*EXPECTED_DEMO_FILES, *EXPECTED_ASSET_FILES)))
+PROVENANCE_SOURCE_FILES = tuple(
+    sorted(
+        (
+            "MANIFEST.in",
+            "Makefile",
+            "README.md",
+            "docs/run-provenance.md",
+            "pyproject.toml",
+            "requirements-dev.txt",
+            "requirements.txt",
+            "scripts/capture_demo.py",
+            "src/receipt_extractor/__init__.py",
+            "src/receipt_extractor/artifact_io.py",
+            "src/receipt_extractor/file_io.py",
+            "src/receipt_extractor/gpt.py",
+            "src/receipt_extractor/main.py",
+            "src/receipt_extractor/provenance.py",
+            "src/receipt_extractor/replay.py",
+            "src/receipt_extractor/schema.py",
+            "tests/__init__.py",
+            "tests/conftest.py",
+            "tests/test_artifact_io.py",
+            "tests/test_cli.py",
+            "tests/test_cli_provenance.py",
+            "tests/test_demo_evidence.py",
+            "tests/test_file_io.py",
+            "tests/test_gpt.py",
+            "tests/test_main_internals.py",
+            "tests/test_provenance.py",
+            "tests/test_replay.py",
+            "tests/test_schema.py",
+        )
+    )
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +152,12 @@ class _FailureEvidence(TypedDict):
     cases: list[_FailureCase]
     replay_mismatch_output: _AbsentOutput
     preserved_output: _PreservedOutput
+
+
+class _ProvenanceCapture(TypedDict):
+    run_output: str
+    verification_output: str
+    source: dict[str, Any]
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -314,6 +388,31 @@ def _run(
     return completed.stdout
 
 
+def _sha256(path: Path) -> str:
+    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+
+def _file_record(path: Path, *, logical_path: str) -> dict[str, object]:
+    return {
+        "path": logical_path,
+        "bytes": path.stat().st_size,
+        "sha256": _sha256(path),
+    }
+
+
+def _stream_record(
+    value: str,
+    *,
+    artifact: str | None,
+) -> dict[str, object]:
+    encoded = value.encode("utf-8")
+    return {
+        "artifact": artifact,
+        "bytes": len(encoded),
+        "sha256": f"sha256:{hashlib.sha256(encoded).hexdigest()}",
+    }
+
+
 def _actual_arguments(
     demo_dir: Path,
     logical_arguments: Sequence[str],
@@ -524,6 +623,209 @@ def _capture_failure_evidence(
     }
 
 
+def _provenance_command(arguments: Sequence[str]) -> str:
+    invocation = shlex.join(("python", "-m", "receipt_extractor.main", *arguments))
+    return f"PYTHONPATH=demo/failures/provider-sentinel:src {invocation}"
+
+
+def _capture_provenance_evidence(
+    *,
+    repository: Path,
+    demo_dir: Path,
+    evidence_dir: Path,
+) -> _ProvenanceCapture:
+    logical_create = (
+        "demo/inputs",
+        "--replay",
+        "demo/replay-manifest.json",
+        "--run-output",
+        "demo/evidence/replay-run.json",
+    )
+    logical_verify = (
+        "demo/inputs",
+        "--verify-run",
+        "demo/evidence/replay-run.json",
+        "--against-manifest",
+        "demo/replay-manifest.json",
+    )
+    scratch_parent = repository / ".venv" / "evidence-scratch"
+    scratch_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="receipt-provenance-",
+        dir=scratch_parent,
+    ) as temporary:
+        scratch_root = Path(temporary)
+        scratch_root.chmod(0o700)
+        scratch_demo = scratch_root / "demo"
+        scratch_evidence = scratch_demo / "evidence"
+        scratch_failures = scratch_demo / "failures"
+        scratch_evidence.mkdir(parents=True, mode=0o700)
+        shutil.copytree(demo_dir / "inputs", scratch_demo / "inputs")
+        shutil.copytree(
+            demo_dir / "failures" / "provider-sentinel",
+            scratch_failures / "provider-sentinel",
+        )
+        shutil.copy2(
+            demo_dir / "replay-manifest.json",
+            scratch_demo / "replay-manifest.json",
+        )
+        provider_sentinel = scratch_failures / "provider-sentinel"
+
+        create = _execute(
+            repository,
+            _actual_arguments(scratch_demo, logical_create),
+            pythonpath_prefixes=(provider_sentinel,),
+        )
+        if create.returncode != 0 or create.stdout or create.stderr:
+            raise RuntimeError(
+                "provenance creation evidence drifted; "
+                "captured details intentionally suppressed"
+            )
+        scratch_run = scratch_evidence / "replay-run.json"
+        if not scratch_run.is_file():
+            raise RuntimeError("provenance creation did not publish its run bundle")
+        run_details = scratch_run.lstat()
+        if (
+            not stat.S_ISREG(run_details.st_mode)
+            or run_details.st_nlink != 1
+            or stat.S_IMODE(run_details.st_mode) != 0o600
+            or run_details.st_size < 1
+        ):
+            raise RuntimeError(
+                "provenance creation did not publish one nonempty private file"
+            )
+        run_bytes = scratch_run.read_bytes()
+
+        verify = _execute(
+            repository,
+            _actual_arguments(scratch_demo, logical_verify),
+            pythonpath_prefixes=(provider_sentinel,),
+        )
+        expected_verification = (
+            '{\n  "mode": "verify-run",\n  "schema_version": 1,\n'
+            '  "verified": true\n}\n'
+        )
+        if (
+            verify.returncode != 0
+            or verify.stderr
+            or verify.stdout != expected_verification
+        ):
+            raise RuntimeError(
+                "provenance verification evidence drifted; "
+                "captured details intentionally suppressed"
+            )
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        tracked_run = evidence_dir / "replay-run.json"
+        tracked_run.write_bytes(run_bytes)
+        verification_path = evidence_dir / "run-verification.json"
+        verification_path.write_text(verify.stdout, encoding="ascii")
+
+    run_document = json.loads(run_bytes)
+    body = run_document["body"]
+    contract = body["contract"]
+    source: dict[str, Any] = {
+        "schema_version": 1,
+        "privacy": "synthetic fixtures only; no provider request",
+        "environment": {
+            "OPENAI_API_KEY": "absent",
+            "PYTHONPATH_prefix": "demo/failures/provider-sentinel:src",
+        },
+        "commands": {
+            "create": {
+                "argv": [
+                    "python",
+                    "-m",
+                    "receipt_extractor.main",
+                    *logical_create,
+                ],
+                "normalized": _provenance_command(logical_create),
+                "exit_code": create.returncode,
+                "stdout": _stream_record(create.stdout, artifact=None),
+                "stderr": _stream_record(create.stderr, artifact=None),
+            },
+            "verify": {
+                "argv": [
+                    "python",
+                    "-m",
+                    "receipt_extractor.main",
+                    *logical_verify,
+                ],
+                "normalized": _provenance_command(logical_verify),
+                "exit_code": verify.returncode,
+                "stdout": _stream_record(
+                    verify.stdout,
+                    artifact="demo/evidence/run-verification.json",
+                ),
+                "stderr": _stream_record(verify.stderr, artifact=None),
+            },
+        },
+        "bindings": [
+            {
+                "id": "input_batch",
+                "label": "Exact input batch",
+                "value": body["input_batch_digest"],
+                "producer": "ordered canonical input descriptors",
+                "run_field": "body.input_batch_digest",
+            },
+            {
+                "id": "receipt_contract",
+                "label": "Receipt contract v1",
+                "value": contract["digest"],
+                "producer": "domain-separated canonical contract JSON",
+                "run_field": "body.contract.digest",
+            },
+            {
+                "id": "replay_manifest_file",
+                "label": "Raw replay manifest",
+                "value": body["replay_manifest_file_sha256"],
+                "producer": "SHA-256 of exact manifest file bytes",
+                "run_field": "body.replay_manifest_file_sha256",
+            },
+            {
+                "id": "run_id",
+                "label": "Complete run body",
+                "value": run_document["run_id"],
+                "producer": "domain-separated canonical run body",
+                "run_field": "run_id",
+            },
+        ],
+        "verifier_edges": [
+            {
+                "binding": "input_batch",
+                "from": "current preflight descriptors",
+                "to": "manifest batch and run body",
+            },
+            {
+                "binding": "receipt_contract",
+                "from": "current receipt contract",
+                "to": "run body contract",
+            },
+            {
+                "binding": "replay_manifest_file",
+                "from": "exact manifest file bytes",
+                "to": "run body manifest digest",
+            },
+            {
+                "binding": "run_id",
+                "from": "complete canonical run body",
+                "to": "stored run identity",
+            },
+        ],
+        "verification_checks": [
+            "bounded pinned JSON reads",
+            "normal image preflight",
+            "exact ordered input names",
+            "strict typed output equality",
+            "current receipt schema",
+        ],
+    }
+    return {
+        "run_output": run_bytes.decode("ascii"),
+        "verification_output": verify.stdout,
+        "source": source,
+    }
+
+
 def _wrapped_lines(text: str, *, width: int = 112) -> list[str]:
     lines: list[str] = []
     for raw_line in text.rstrip().splitlines():
@@ -578,6 +880,56 @@ def _terminal_capture(
     y += 12
     for line in output_lines:
         color = CYAN if line.lstrip().startswith(("{", "}", "[", "]")) else TEXT
+        draw.text((58, y), line, font=_font(20), fill=color)
+        y += line_height
+    return image
+
+
+def _provenance_terminal_capture(
+    *,
+    create_command: str,
+    verify_command: str,
+    verification_output: str,
+) -> Image.Image:
+    create_lines = _wrapped_lines(f"$ {create_command}", width=105)
+    verify_lines = _wrapped_lines(f"$ {verify_command}", width=105)
+    output_lines = _wrapped_lines(verification_output, width=105)
+    line_height = 28
+    height = max(
+        520,
+        130
+        + (len(create_lines) + len(verify_lines) + len(output_lines) + 4) * line_height,
+    )
+    image = Image.new("RGB", (1440, height), CANVAS)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        (24, 24, 1416, height - 24),
+        radius=24,
+        fill=PANEL,
+        outline="#293653",
+        width=2,
+    )
+    for x, color in ((58, RED), (84, AMBER), (110, GREEN)):
+        draw.ellipse((x - 8, 50, x + 8, 66), fill=color)
+    draw.text(
+        (136, 43),
+        "Actual content-addressed replay commands",
+        font=_font(22),
+        fill=TEXT,
+    )
+    draw.line((42, 86, 1398, 86), fill="#293653", width=2)
+
+    y = 108
+    for line in create_lines:
+        draw.text((58, y), line, font=_font(20), fill=GREEN)
+        y += line_height
+    y += line_height
+    for line in verify_lines:
+        draw.text((58, y), line, font=_font(20), fill=GREEN)
+        y += line_height
+    y += 12
+    for line in output_lines:
+        color = CYAN if line.lstrip().startswith(("{", "}")) else TEXT
         draw.text((58, y), line, font=_font(20), fill=color)
         y += line_height
     return image
@@ -736,8 +1088,10 @@ def _collect_test_count(repository: Path) -> int:
 def _coverage_summary(coverage_path: Path, *, test_count: int) -> dict[str, Any]:
     decoded = json.loads(coverage_path.read_text(encoding="utf-8"))
     selected = (
+        ("artifact_io", "src/receipt_extractor/artifact_io.py"),
         ("file_io", "src/receipt_extractor/file_io.py"),
         ("main", "src/receipt_extractor/main.py"),
+        ("provenance", "src/receipt_extractor/provenance.py"),
         ("replay", "src/receipt_extractor/replay.py"),
         ("gpt", "src/receipt_extractor/gpt.py"),
         ("schema", "src/receipt_extractor/schema.py"),
@@ -763,7 +1117,8 @@ def _coverage_summary(coverage_path: Path, *, test_count: int) -> dict[str, Any]
 
 
 def _coverage_png(summary: dict[str, Any]) -> Image.Image:
-    width, height = 1440, 820
+    width = 1440
+    height = 284 + len(summary["modules"]) * 108
     image = Image.new("RGB", (width, height), CANVAS)
     draw = ImageDraw.Draw(image)
     draw.text((72, 54), "Offline verification coverage", font=_font(42), fill=TEXT)
@@ -778,7 +1133,7 @@ def _coverage_png(summary: dict[str, Any]) -> Image.Image:
     )
     modules = summary["modules"]
     for index, module in enumerate(modules):
-        y = 202 + index * 108
+        y = 188 + index * 108
         label = str(module["module"])
         percent = float(module["percent"])
         draw.text((78, y + 14), label, font=_font(25), fill=TEXT)
@@ -801,7 +1156,7 @@ def _coverage_png(summary: dict[str, Any]) -> Image.Image:
             fill=color,
         )
     draw.text(
-        (78, 758),
+        (78, height - 56),
         "Generated from coverage.py JSON after the full synthetic/offline suite.",
         font=_font(20),
         fill=MUTED,
@@ -829,26 +1184,30 @@ def _svg_text(
 
 def _architecture_svg() -> str:
     nodes = (
-        (55, 300, 210, 118, "Receipt batch", "PNG / JPEG / WebP", CYAN),
-        (330, 300, 240, 118, "Pinned preflight", "file_io.py", GREEN),
-        (665, 96, 230, 108, "Dry-run", "audit metadata", PURPLE),
-        (665, 300, 230, 118, "Exact replay", "replay.py", AMBER),
-        (665, 530, 230, 118, "Live Responses", "gpt.py", RED),
-        (985, 300, 220, 118, "Typed boundary", "ReceiptFields", GREEN),
-        (1260, 300, 150, 118, "Private sink", "0600 / stdout", CYAN),
-        (330, 600, 240, 108, "Replay manifest", "strict JSON + digest", AMBER),
+        (32, 304, 190, 112, "Receipt batch", "PNG / JPEG / WebP", CYAN),
+        (270, 304, 205, 112, "Pinned preflight", "file_io.py", GREEN),
+        (535, 304, 190, 112, "Mode router", "main.py", PURPLE),
+        (790, 86, 190, 104, "Dry-run", "audit metadata", PURPLE),
+        (790, 304, 190, 112, "Exact replay", "replay.py", AMBER),
+        (790, 526, 190, 112, "Live Responses", "gpt.py", RED),
+        (1040, 304, 190, 112, "Typed boundary", "ReceiptFields", GREEN),
+        (1270, 304, 145, 112, "Result sink", "0600 / stdout", CYAN),
+        (270, 690, 205, 104, "Replay manifest", "strict JSON + digest", AMBER),
+        (790, 690, 190, 104, "Run builder", "provenance.py", CYAN),
+        (1040, 690, 190, 104, "Run verifier", "four bindings", GREEN),
+        (1270, 690, 145, 104, "Fixed stdout", "verified: true", GREEN),
     )
     parts = [
-        '<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="800" '
-        'viewBox="0 0 1440 800" role="img" '
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="880" '
+        'viewBox="0 0 1440 880" role="img" '
         'aria-labelledby="title description">',
         '<title id="title">Auditable Receipt Extractor architecture</title>',
         (
             '<desc id="description">The real CLI flow from bounded receipt inputs '
-            "through preflight, dry-run, exact replay or live Responses, typed "
-            "validation, and an explicit private sink.</desc>"
+            "through preflight and three execution modes, plus content-addressed "
+            "replay run creation and local four-binding verification.</desc>"
         ),
-        f'<rect width="1440" height="800" fill="{CANVAS}"/>',
+        f'<rect width="1440" height="880" fill="{CANVAS}"/>',
         "<defs>",
         (
             f'<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" '
@@ -859,7 +1218,7 @@ def _architecture_svg() -> str:
         _svg_text(
             x=52,
             y=66,
-            text="One preflight, three explicit execution modes",
+            text="One preflight, three modes, one local provenance verifier",
             size=34,
             anchor="start",
         ),
@@ -867,8 +1226,8 @@ def _architecture_svg() -> str:
             x=54,
             y=105,
             text=(
-                "Replay and live share one typed boundary; dry-run emits "
-                "audit metadata."
+                "Replay can emit a normal result or one content-addressed "
+                "run bundle; verification never imports OpenAI."
             ),
             size=20,
             color=MUTED,
@@ -877,15 +1236,20 @@ def _architecture_svg() -> str:
         ),
     ]
     arrows = (
-        "M 265 359 L 330 359",
-        "M 570 350 L 665 150",
-        "M 570 359 L 665 359",
-        "M 570 368 L 665 584",
-        "M 570 654 L 665 398",
-        "M 895 150 C 1050 150 1120 240 1260 330",
-        "M 895 359 L 985 359",
-        "M 895 584 C 940 584 940 398 985 398",
-        "M 1205 359 L 1260 359",
+        "M 222 360 L 270 360",
+        "M 475 360 L 535 360",
+        "M 725 342 L 790 138",
+        "M 725 360 L 790 360",
+        "M 725 378 L 790 582",
+        "M 475 742 C 610 742 640 430 790 390",
+        "M 980 360 L 1040 360",
+        "M 980 582 C 1020 582 1010 402 1040 402",
+        "M 1230 360 L 1270 360",
+        "M 980 390 C 1020 470 880 610 885 690",
+        "M 475 742 L 790 742",
+        "M 980 742 L 1040 742",
+        "M 475 768 C 700 850 1110 850 1135 794",
+        "M 1230 742 L 1270 742",
     )
     parts.extend(
         f'<path d="{path}" stroke="{MUTED}" '
@@ -918,18 +1282,14 @@ def _architecture_svg() -> str:
     parts.extend(
         (
             _svg_text(
-                x=780,
-                y=742,
-                text="Offline: no key, no OpenAI import",
+                x=720,
+                y=842,
+                text=(
+                    "Offline replay provenance: synthetic evidence, no key, "
+                    "no provider request"
+                ),
                 size=18,
                 color=AMBER,
-            ),
-            _svg_text(
-                x=780,
-                y=772,
-                text="Live: explicit upload acknowledgement + explicit sink",
-                size=18,
-                color=RED,
             ),
             "</svg>",
         )
@@ -938,7 +1298,8 @@ def _architecture_svg() -> str:
 
 
 def _coverage_svg(summary: dict[str, Any]) -> str:
-    width, height = 1080, 620
+    width = 1080
+    height = 206 + len(summary["modules"]) * 82
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
         f'height="{height}" viewBox="0 0 {width} {height}" role="img" '
@@ -971,7 +1332,7 @@ def _coverage_svg(summary: dict[str, Any]) -> str:
         ),
     ]
     for index, module in enumerate(summary["modules"]):
-        y = 142 + index * 82
+        y = 132 + index * 82
         percent = float(module["percent"])
         bar_width = round(710 * percent / 100)
         color = GREEN if percent >= 90 else AMBER
@@ -1006,7 +1367,7 @@ def _coverage_svg(summary: dict[str, Any]) -> str:
         (
             _svg_text(
                 x=52,
-                y=584,
+                y=height - 32,
                 text="Source: coverage.py JSON emitted by make check",
                 size=16,
                 color=MUTED,
@@ -1017,6 +1378,264 @@ def _coverage_svg(summary: dict[str, Any]) -> str:
         )
     )
     return "".join(parts)
+
+
+def _provenance_svg(source: dict[str, Any]) -> str:
+    bindings = source["bindings"]
+    edges = source["verifier_edges"]
+    checks = source["verification_checks"]
+    if (
+        not isinstance(bindings, list)
+        or not isinstance(edges, list)
+        or not isinstance(checks, list)
+    ):
+        raise RuntimeError("provenance source does not match renderer schema")
+    parts = [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="950" '
+        'viewBox="0 0 1440 950" role="img" '
+        'aria-labelledby="title description">',
+        '<title id="title">Four content-addressed replay run bindings</title>',
+        (
+            '<desc id="description">Four locally recomputed values connect '
+            "current inputs, the receipt contract, exact manifest bytes, and "
+            "the complete run body to one verified replay run. Non-hash checks "
+            "also enforce ordered names, typed outputs, bounded reads, image "
+            "preflight, and the current schema.</desc>"
+        ),
+        f'<rect width="1440" height="950" fill="{CANVAS}"/>',
+        "<defs>",
+        (
+            f'<marker id="binding-arrow" viewBox="0 0 10 10" refX="9" refY="5" '
+            'markerWidth="8" markerHeight="8" orient="auto-start-reverse">'
+            f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{MUTED}"/></marker>'
+        ),
+        "</defs>",
+        _svg_text(
+            x=52,
+            y=62,
+            text="Four bindings, recomputed by the local verifier",
+            size=34,
+            anchor="start",
+        ),
+        _svg_text(
+            x=54,
+            y=101,
+            text=(
+                "Every digest below is read from the generated run and "
+                "provenance source; none is a signature or model claim."
+            ),
+            size=19,
+            color=MUTED,
+            anchor="start",
+            weight=400,
+        ),
+    ]
+    for index, (binding, edge) in enumerate(zip(bindings, edges, strict=True)):
+        if binding["id"] != edge["binding"]:
+            raise RuntimeError("provenance binding and verifier edge order drifted")
+        y = 148 + index * 150
+        accent = (CYAN, PURPLE, AMBER, GREEN)[index]
+        parts.extend(
+            (
+                (
+                    f'<rect x="50" y="{y}" width="330" height="112" rx="20" '
+                    f'fill="{PANEL}" stroke="{accent}" stroke-width="3"/>'
+                ),
+                _svg_text(
+                    x=72,
+                    y=y + 39,
+                    text=str(binding["label"]),
+                    size=22,
+                    color=accent,
+                    anchor="start",
+                ),
+                _svg_text(
+                    x=72,
+                    y=y + 74,
+                    text=str(edge["from"]),
+                    size=16,
+                    color=MUTED,
+                    anchor="start",
+                    weight=400,
+                ),
+                (
+                    f'<path d="M 380 {y + 56} L 445 {y + 56}" '
+                    f'stroke="{MUTED}" stroke-width="3" fill="none" '
+                    'marker-end="url(#binding-arrow)"/>'
+                ),
+                (
+                    f'<rect x="445" y="{y}" width="725" height="112" rx="20" '
+                    f'fill="{PANEL}" stroke="{accent}" stroke-width="3"/>'
+                ),
+                _svg_text(
+                    x=470,
+                    y=y + 34,
+                    text=str(binding["producer"]),
+                    size=17,
+                    anchor="start",
+                ),
+                _svg_text(
+                    x=470,
+                    y=y + 67,
+                    text=str(binding["value"]),
+                    size=15,
+                    color=accent,
+                    anchor="start",
+                    weight=500,
+                ),
+                _svg_text(
+                    x=470,
+                    y=y + 94,
+                    text=f"run field: {binding['run_field']}",
+                    size=15,
+                    color=MUTED,
+                    anchor="start",
+                    weight=400,
+                ),
+                (
+                    f'<path d="M 1170 {y + 56} L 1232 {y + 56}" '
+                    f'stroke="{MUTED}" stroke-width="3" fill="none" '
+                    'marker-end="url(#binding-arrow)"/>'
+                ),
+            )
+        )
+    parts.extend(
+        (
+            '<rect x="50" y="730" width="1120" height="145" rx="22" '
+            f'fill="{PANEL}" stroke="{PURPLE}" stroke-width="3"/>',
+            _svg_text(
+                x=72,
+                y=764,
+                text="Non-hash equality checks",
+                size=21,
+                color=PURPLE,
+                anchor="start",
+            ),
+        )
+    )
+    badge_positions = (
+        (72, 783, 300),
+        (386, 783, 260),
+        (660, 783, 285),
+        (72, 827, 300),
+        (386, 827, 300),
+    )
+    if len(checks) != len(badge_positions):
+        raise RuntimeError("provenance verification check count drifted")
+    for check, (x, y, width) in zip(checks, badge_positions, strict=True):
+        parts.extend(
+            (
+                (
+                    f'<rect x="{x}" y="{y}" width="{width}" height="34" rx="12" '
+                    f'fill="{PANEL_LIGHT}" stroke="{MUTED}" stroke-width="1"/>'
+                ),
+                _svg_text(
+                    x=x + 14,
+                    y=y + 23,
+                    text=str(check),
+                    size=14,
+                    anchor="start",
+                    weight=500,
+                ),
+            )
+        )
+    parts.extend(
+        (
+            '<path d="M 1170 807 L 1232 807" '
+            f'stroke="{MUTED}" stroke-width="3" fill="none" '
+            'marker-end="url(#binding-arrow)"/>',
+            '<rect x="1232" y="148" width="158" height="727" rx="24" '
+            f'fill="{PANEL}" stroke="{GREEN}" stroke-width="3"/>',
+            _svg_text(
+                x=1311,
+                y=450,
+                text="Local",
+                size=25,
+                color=GREEN,
+            ),
+            _svg_text(
+                x=1311,
+                y=488,
+                text="verifier",
+                size=25,
+                color=GREEN,
+            ),
+            _svg_text(
+                x=1311,
+                y=544,
+                text="verified:",
+                size=17,
+                color=MUTED,
+                weight=400,
+            ),
+            _svg_text(
+                x=1311,
+                y=572,
+                text="true",
+                size=21,
+                color=GREEN,
+            ),
+            _svg_text(
+                x=52,
+                y=918,
+                text=(
+                    "Synthetic replay-only evidence · no provider request · "
+                    "not authenticity"
+                ),
+                size=18,
+                color=MUTED,
+                anchor="start",
+                weight=400,
+            ),
+            "</svg>",
+        )
+    )
+    return "".join(parts)
+
+
+def _generated_inventory(output_root: Path) -> tuple[str, ...]:
+    paths = (
+        *(path for path in (output_root / "demo").rglob("*") if path.is_file()),
+        *(
+            path
+            for path in (output_root / "docs" / "assets").rglob("*")
+            if path.is_file()
+        ),
+    )
+    return tuple(sorted(path.relative_to(output_root).as_posix() for path in paths))
+
+
+def _finalize_provenance_source(
+    *,
+    repository: Path,
+    output_root: Path,
+    source: dict[str, Any],
+) -> None:
+    source_path = output_root / "demo" / "evidence" / "provenance-source.json"
+    generated_before_source = tuple(
+        path
+        for path in EXPECTED_GENERATED_FILES
+        if path != "demo/evidence/provenance-source.json"
+    )
+    actual_before_source = tuple(
+        path
+        for path in _generated_inventory(output_root)
+        if path != "demo/evidence/provenance-source.json"
+    )
+    if actual_before_source != generated_before_source:
+        raise RuntimeError("generated evidence inventory does not match its allowlist")
+
+    source["artifacts"] = [
+        _file_record(output_root / logical_path, logical_path=logical_path)
+        for logical_path in generated_before_source
+    ]
+    source["sources"] = [
+        _file_record(repository / logical_path, logical_path=logical_path)
+        for logical_path in PROVENANCE_SOURCE_FILES
+    ]
+    _write_json(source_path, source)
+    if _generated_inventory(output_root) != EXPECTED_GENERATED_FILES:
+        raise RuntimeError("final evidence inventory does not match its allowlist")
 
 
 def _gif_frame(source: Image.Image, *, label: str) -> Image.Image:
@@ -1041,6 +1660,7 @@ def _save_assets(
     replay_output: str,
     coverage: dict[str, Any],
     failures: _FailureEvidence,
+    provenance_capture: _ProvenanceCapture,
 ) -> None:
     asset_dir.mkdir(parents=True, exist_ok=True)
     montage = _receipt_montage(input_dir)
@@ -1066,6 +1686,19 @@ def _save_assets(
     )
     coverage_image = _coverage_png(coverage)
     failure_image = _failure_gallery(failures)
+    source = provenance_capture["source"]
+    commands = source["commands"]
+    if not isinstance(commands, dict):
+        raise RuntimeError("provenance commands do not match renderer schema")
+    create_command = commands["create"]
+    verify_command = commands["verify"]
+    if not isinstance(create_command, dict) or not isinstance(verify_command, dict):
+        raise RuntimeError("provenance command records do not match renderer schema")
+    provenance_image = _provenance_terminal_capture(
+        create_command=str(create_command["normalized"]),
+        verify_command=str(verify_command["normalized"]),
+        verification_output=provenance_capture["verification_output"],
+    )
 
     raster_assets = {
         "demo-receipts.png": montage,
@@ -1074,6 +1707,7 @@ def _save_assets(
         "cli-replay.png": replay_capture,
         "coverage.png": coverage_image,
         "failure-boundaries.png": failure_image,
+        "cli-provenance.png": provenance_image,
     }
     for name, image in raster_assets.items():
         image.save(asset_dir / name, format="PNG", compress_level=9)
@@ -1086,20 +1720,28 @@ def _save_assets(
         _coverage_svg(coverage),
         encoding="utf-8",
     )
+    (asset_dir / "provenance-bindings.svg").write_text(
+        _provenance_svg(source),
+        encoding="utf-8",
+    )
     frames = [
-        _gif_frame(montage, label="1 / 6  Generate explicit synthetic receipts"),
-        _gif_frame(help_capture, label="2 / 6  Inspect the real CLI contract"),
-        _gif_frame(dry_capture, label="3 / 6  Preflight every input locally"),
-        _gif_frame(replay_capture, label="4 / 6  Reproduce the exact batch offline"),
-        _gif_frame(failure_image, label="5 / 6  Exercise fail-closed boundaries"),
-        _gif_frame(coverage_image, label="6 / 6  Verify the complete offline gate"),
+        _gif_frame(montage, label="1 / 7  Generate explicit synthetic receipts"),
+        _gif_frame(help_capture, label="2 / 7  Inspect the real CLI contract"),
+        _gif_frame(dry_capture, label="3 / 7  Preflight every input locally"),
+        _gif_frame(replay_capture, label="4 / 7  Reproduce the exact batch offline"),
+        _gif_frame(
+            provenance_image,
+            label="5 / 7  Create and verify a content-addressed run",
+        ),
+        _gif_frame(failure_image, label="6 / 7  Exercise fail-closed boundaries"),
+        _gif_frame(coverage_image, label="7 / 7  Verify the complete offline gate"),
     ]
     frames[0].save(
         asset_dir / "demo.gif",
         format="GIF",
         save_all=True,
         append_images=frames[1:],
-        duration=(2200, 2200, 2700, 3000, 3000, 2600),
+        duration=(2200, 2200, 2700, 3000, 3200, 3000, 2600),
         loop=0,
         disposal=2,
         optimize=False,
@@ -1146,6 +1788,11 @@ def capture(
         encoding="ascii",
     )
     _write_json(evidence_dir / "failure-paths.json", failures)
+    provenance_capture = _capture_provenance_evidence(
+        repository=repository,
+        demo_dir=demo_dir,
+        evidence_dir=evidence_dir,
+    )
 
     coverage = _coverage_summary(
         coverage_path,
@@ -1160,6 +1807,12 @@ def capture(
         replay_output=replay_output,
         coverage=coverage,
         failures=failures,
+        provenance_capture=provenance_capture,
+    )
+    _finalize_provenance_source(
+        repository=repository,
+        output_root=output_root,
+        source=provenance_capture["source"],
     )
 
 

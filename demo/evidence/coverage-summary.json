@@ -1,18 +1,26 @@
 {
-  "combined_percent": 91.33,
+  "combined_percent": 93.26,
   "command": "make check",
   "modules": [
+    {
+      "module": "artifact_io",
+      "percent": 89.62
+    },
     {
       "module": "file_io",
       "percent": 91.91
     },
     {
       "module": "main",
-      "percent": 89.91
+      "percent": 92.35
+    },
+    {
+      "module": "provenance",
+      "percent": 97.06
     },
     {
       "module": "replay",
-      "percent": 90.48
+      "percent": 96.95
     },
     {
       "module": "gpt",
@@ -24,5 +32,5 @@
     }
   ],
   "schema_version": 1,
-  "test_count": 123
+  "test_count": 221
 }

@@ -1,7 +1,6 @@
 # Content-addressed replay run provenance
 
-Status: core schema, CLI bundle creation, and offline verification are
-implemented; reproducible synthetic evidence is the remaining milestone.
+Status: implemented and covered by reproducible synthetic evidence.
 
 The existing replay manifest answers a pre-execution question:
 
@@ -9,10 +8,11 @@ The existing replay manifest answers a pre-execution question:
 > replay consume?
 
 It does not record the result that a particular invocation actually
-materialized. The next milestone adds one private, content-addressed run bundle
-that binds the validated input batch, ordered typed results, receipt-field
-contract, and exact replay-manifest bytes. A separate offline verifier will
-recompute every binding from the bundle, manifest, and current input directory.
+materialized. The `--run-output` workflow adds one private, content-addressed
+run bundle that binds the validated input batch, ordered typed results,
+receipt-field contract, and exact replay-manifest bytes. The separate
+`--verify-run` mode recomputes every binding from the bundle, manifest, and
+current input directory.
 
 This is a local consistency receipt. It is not a signature, trusted timestamp,
 authorship proof, software-supply-chain attestation, or evidence that a remote
@@ -38,30 +38,41 @@ claim.
 
 ## Canonical bundle
 
-The planned top-level document is `receipt-extractor-run` schema version 1:
+The top-level document is `receipt-extractor-run` schema version 1. The
+checked-in synthetic example is
+[`demo/evidence/replay-run.json`](../demo/evidence/replay-run.json):
 
 ```json
 {
   "kind": "receipt-extractor-run",
   "schema_version": 1,
-  "run_id": "sha256:…",
+  "run_id": "sha256:b106034f37c834ee86f3c6086ced2855d46ff402aef16ff7c9235ab8fd4b7a08",
   "body": {
     "mode": "replay",
     "contract": {
       "id": "receipt-extractor/receipt-fields",
       "schema_version": 1,
-      "digest": "sha256:…"
+      "digest": "sha256:a41dc34788b12c26540266a99c03aa6aecbe70df7250b266676e5fce55f268b2"
     },
-    "input_batch_digest": "sha256:…",
-    "replay_manifest_file_sha256": "sha256:…",
+    "input_batch_digest": "sha256:5d45a0fe5c74d98491b6f88de8e3ec48fc5c7b7b00299d6e08e5e2f9b8a181a3",
+    "replay_manifest_file_sha256": "sha256:f994e398fe79f575daefbd566feb37c4b9dfcbe1db7838bb6218630b072d04d5",
     "items": [
       {
         "input_name": "cafe-lumen.png",
         "output": {
           "date": "2026-07-24",
-          "amount": "$12.50",
-          "vendor": "Synthetic Market",
-          "category": "Other"
+          "amount": "$18.40",
+          "vendor": "Cafe Lumen",
+          "category": "Meals"
+        }
+      },
+      {
+        "input_name": "metro-line.webp",
+        "output": {
+          "date": "2026-07-24",
+          "amount": "$3.25",
+          "vendor": "Metro Line",
+          "category": "Transport"
         }
       }
     ]
@@ -173,7 +184,7 @@ The normalization rules apply only to `date`, `amount`, and `vendor`.
 `category` is a strict closed enum: whitespace-padded, blank, unknown, or
 control-bearing values are rejected rather than normalized.
 
-The Pydantic dependency is pinned. Golden-vector tests will freeze the exact
+The Pydantic dependency is pinned. Golden-vector tests freeze the exact
 contract document and digest, then cross-check each literal rule against
 `ReceiptFields`. A semantic contract change requires an explicit schema-version
 decision; it must not silently inherit the old identity.
@@ -188,7 +199,7 @@ receipt-extractor inputs \
   --output replay-result.json
 ```
 
-The new sink requests the single-file bundle:
+The provenance sink requests the single-file bundle:
 
 ```bash
 receipt-extractor inputs \
@@ -202,7 +213,7 @@ reservation. The file is mode `0600`; its parent must be current-user-owned and
 not group- or world-writable. One committed file avoids a result/sidecar
 partial-publication state.
 
-Creation must:
+Creation:
 
 1. preflight every image through the production image boundary;
 2. safely read and validate the exact replay manifest;
@@ -241,7 +252,7 @@ The fixed summary omits even the receipt count, along with filenames, extracted
 fields, manifest hashes, run ID, paths, and timestamps. Failure text is stable
 and redacted.
 
-The verifier must independently:
+The verifier independently:
 
 1. preflight the current input directory;
 2. read both JSON files through the shared bounded descriptor-pinned reader;
@@ -263,9 +274,9 @@ because the run body deliberately binds its exact bytes.
 
 ## Shared input boundary
 
-Replay and run verification need the same bounded JSON-file guarantees. The
-first implementation commit will extract the existing replay reader into a
-small shared module while preserving replay behavior and error redaction:
+Replay and run verification use the same bounded JSON-file guarantees. The
+shared `artifact_io.py` module preserves replay behavior and error redaction
+while enforcing:
 
 - `.json` leaf and safely encodable path components;
 - descriptor traversal without following symlinks or `..`;
@@ -275,8 +286,8 @@ small shared module while preserving replay behavior and error redaction:
 - duplicate-key, non-finite, BOM, invalid-UTF-8, recursion, and strict-schema
   rejection.
 
-The refactor must be behavior-preserving for the existing replay manifest
-before provenance code depends on it.
+Focused regression tests prove that the shared reader remains
+behavior-preserving for the existing replay manifest.
 
 ## Privacy boundary
 
@@ -286,29 +297,41 @@ the original result and replay manifest. It must not be committed, pasted into
 issues, written to a shared directory, or emitted to stdout by default.
 
 Even a run ID can correlate identical content across copies, so the verifier
-does not print it. The checked-in example will use only visibly synthetic,
+does not print it. The checked-in example uses only visibly synthetic,
 repository-authored fixtures.
 
-## Evidence plan
+## Reproducible evidence
 
-Committed evidence will come only from the existing deterministic synthetic
-receipt pair and must be rebuilt by `demo-check`:
+Committed evidence comes only from the deterministic synthetic receipt pair
+and is rebuilt byte-for-byte by `make demo-check`:
 
-1. a real `replay-run.json` produced by the production CLI;
-2. a real redacted `run-verification.json` capture;
-3. a terminal screenshot of creation and verification;
-4. a source/data-backed provenance diagram showing four hash bindings—the
-   existing input identity, contract identity, whole-body run ID, and raw
-   manifest-file SHA-256—and every verifier edge;
-5. an updated architecture diagram and CLI-help capture;
-6. a seventh GIF frame for verification;
-7. an exact manifest binding source, fixtures, commands, and outputs.
+1. the real CLI-created
+   [`replay-run.json`](../demo/evidence/replay-run.json);
+2. the real fixed
+   [`run-verification.json`](../demo/evidence/run-verification.json) stdout;
+3. the two-command
+   [`cli-provenance.png`](assets/cli-provenance.png) terminal capture;
+4. the source-backed
+   [`provenance-bindings.svg`](assets/provenance-bindings.svg), showing the
+   input-batch, receipt-contract, raw-manifest-file, and whole-body run-ID
+   bindings;
+5. the normalized commands, file hashes, source hashes, verifier edges, and
+   additional non-hash checks in
+   [`provenance-source.json`](../demo/evidence/provenance-source.json).
 
-Existing receipt montage, replay capture, and failure gallery should remain
-byte-identical unless their actual command contract changes. The generator
-must fail on any unexpected artifact rather than accepting extra files.
+The generator creates the bundle in a fresh mode-`0700` scratch directory,
+requires the CLI result to be a nonempty single-link mode-`0600` file, verifies
+it there with the poison provider module first on `PYTHONPATH`, and only then
+copies the synthetic bytes into the public demo. The tracked copy is public
+evidence and is not a safe destination for real receipt data.
 
-## Required verification
+The receipt montage, normal replay capture, dry-run capture, failure gallery,
+their source JSON, the synthetic input bytes, and replay manifest are pinned by
+reviewed SHA-256 regressions because their commands and fixtures did not
+change. The generator also rejects every file outside its exact 27-file
+artifact allowlist.
+
+## Verified boundaries
 
 - pinned golden vectors for both new digest domains;
 - sensitivity to every body, item, output, contract, and order field;
@@ -325,3 +348,10 @@ must fail on any unexpected artifact rather than accepting extra files.
 - provider poison module proves creation and verification do not import OpenAI;
 - current replay output remains byte-identical;
 - generated evidence rebuilds byte-for-byte.
+
+These checks live in
+[`tests/test_provenance.py`](../tests/test_provenance.py),
+[`tests/test_cli_provenance.py`](../tests/test_cli_provenance.py), and
+[`tests/test_demo_evidence.py`](../tests/test_demo_evidence.py). They establish
+local replay consistency only; they do not establish authenticity, authorship,
+model execution, or extraction accuracy.

@@ -1,0 +1,391 @@
+{
+  "artifacts": [
+    {
+      "bytes": 561,
+      "path": "demo/evidence/coverage-summary.json",
+      "sha256": "sha256:e946e21a0743fc20f4f89ba6fedc26a73c3ceceedfaf47ef6f97599f6e973a8f"
+    },
+    {
+      "bytes": 541,
+      "path": "demo/evidence/dry-run.json",
+      "sha256": "sha256:2897a837e8d065dfa4d66c018c71110c1878968ce0e5fa5fef28ae7bbc4f76a6"
+    },
+    {
+      "bytes": 2690,
+      "path": "demo/evidence/failure-paths.json",
+      "sha256": "sha256:dfd6e40ba30d85515518c3796a3abb371708d5949ad0a3949b37320d04d5b2e9"
+    },
+    {
+      "bytes": 1724,
+      "path": "demo/evidence/help.txt",
+      "sha256": "sha256:de6d2f27e5b76316fd6326f1d8bc0182c6941b620a0da85fb69b4ce818e43411"
+    },
+    {
+      "bytes": 455,
+      "path": "demo/evidence/replay-result.json",
+      "sha256": "sha256:0caca43e535512c10f50813cebd4b7b28efbc8ff652b37dae7c14b6d47922c96"
+    },
+    {
+      "bytes": 1038,
+      "path": "demo/evidence/replay-run.json",
+      "sha256": "sha256:652a25624f6496a28a27752a55c0582736c55908777e53cb0fd151a935bdfee7"
+    },
+    {
+      "bytes": 70,
+      "path": "demo/evidence/run-verification.json",
+      "sha256": "sha256:14a4cc7357c4031b9ae61da38c88d35d1ceed5e5442db082bb58f3b7e5d62484"
+    },
+    {
+      "bytes": 37227,
+      "path": "demo/failures/corrupt-batch/01-valid.png",
+      "sha256": "sha256:1a9d5c5d4d1f9e2ec4b6d5b2b9a8006efac7f044c4011f7648a9311ae7071a35"
+    },
+    {
+      "bytes": 37257,
+      "path": "demo/failures/corrupt-batch/02-corrupt.png",
+      "sha256": "sha256:fb853e2ff76901ef2e0cbfc493e0613432680013f32b56a9fcdab8fa1fd394c8"
+    },
+    {
+      "bytes": 86,
+      "path": "demo/failures/existing-output.json",
+      "sha256": "sha256:bc9a7fa186720d35484fff496356e976846f357d235e4e6baad37214d7683e29"
+    },
+    {
+      "bytes": 74,
+      "path": "demo/failures/provider-sentinel/openai.py",
+      "sha256": "sha256:3223caecaad42f4c89fdc5494a01d182f40a6d8d677ce5d44ac40ff73069e5a1"
+    },
+    {
+      "bytes": 1084,
+      "path": "demo/failures/reversed-replay-manifest.json",
+      "sha256": "sha256:882baa54e40cc1f2dde942f2186094da98b2940963737b78c4ca43abdb802432"
+    },
+    {
+      "bytes": 37227,
+      "path": "demo/inputs/cafe-lumen.png",
+      "sha256": "sha256:1a9d5c5d4d1f9e2ec4b6d5b2b9a8006efac7f044c4011f7648a9311ae7071a35"
+    },
+    {
+      "bytes": 12350,
+      "path": "demo/inputs/metro-line.webp",
+      "sha256": "sha256:d3a2f4f45454b2870779a040421fcee7527c8c2b72ee92024f99d26f5b68bae0"
+    },
+    {
+      "bytes": 1084,
+      "path": "demo/replay-manifest.json",
+      "sha256": "sha256:f994e398fe79f575daefbd566feb37c4b9dfcbe1db7838bb6218630b072d04d5"
+    },
+    {
+      "bytes": 7562,
+      "path": "docs/assets/architecture.svg",
+      "sha256": "sha256:23813b90331cbdb38572f4a885011a70ed04ea5068d3bdf70291e42d8ec9a263"
+    },
+    {
+      "bytes": 65730,
+      "path": "docs/assets/cli-dry-run.png",
+      "sha256": "sha256:6c6558ce4befffaa1bb83005211eac72522124a287cace22a407127b9188de38"
+    },
+    {
+      "bytes": 140666,
+      "path": "docs/assets/cli-help.png",
+      "sha256": "sha256:9a3442d1c06ef0afa2590a1a3b7be38bff4dac92366dfb057dccdf28c656732c"
+    },
+    {
+      "bytes": 39520,
+      "path": "docs/assets/cli-provenance.png",
+      "sha256": "sha256:3513136c05b88099c8a1078e69a1721789ec352e86b5f2566e329666780be319"
+    },
+    {
+      "bytes": 61192,
+      "path": "docs/assets/cli-replay.png",
+      "sha256": "sha256:e5e1eecc65ba109f69586fdd39e9b91cd64de33f217ab6d0c93dbd96d52fb7ff"
+    },
+    {
+      "bytes": 54039,
+      "path": "docs/assets/coverage.png",
+      "sha256": "sha256:a5c8399de76dd2d13ab1eb518843ae1d934a2637f4851316342a27021688e298"
+    },
+    {
+      "bytes": 3768,
+      "path": "docs/assets/coverage.svg",
+      "sha256": "sha256:1ad16276ec48d2ff185082c46f4fcc89266a0aa8b000262cffa3e1c0a94912c3"
+    },
+    {
+      "bytes": 80608,
+      "path": "docs/assets/demo-receipts.png",
+      "sha256": "sha256:1112538c4bfb90cf6fa822fed677bb61f575a70ffd8644f50f64a4e9a7431af3"
+    },
+    {
+      "bytes": 457591,
+      "path": "docs/assets/demo.gif",
+      "sha256": "sha256:ed61fb71b6b2e31fec5709faf9bf1a5f29a1deca96f568e9ee77c33d54444f32"
+    },
+    {
+      "bytes": 140198,
+      "path": "docs/assets/failure-boundaries.png",
+      "sha256": "sha256:5123336516a8681cad83a9879b169deba452e21d9c382e5c3e3afdba2404433b"
+    },
+    {
+      "bytes": 8830,
+      "path": "docs/assets/provenance-bindings.svg",
+      "sha256": "sha256:1bb040d4013c9c1b6a7729a4db89e1c96ac3829dd43ec17312f72878f4611530"
+    }
+  ],
+  "bindings": [
+    {
+      "id": "input_batch",
+      "label": "Exact input batch",
+      "producer": "ordered canonical input descriptors",
+      "run_field": "body.input_batch_digest",
+      "value": "sha256:5d45a0fe5c74d98491b6f88de8e3ec48fc5c7b7b00299d6e08e5e2f9b8a181a3"
+    },
+    {
+      "id": "receipt_contract",
+      "label": "Receipt contract v1",
+      "producer": "domain-separated canonical contract JSON",
+      "run_field": "body.contract.digest",
+      "value": "sha256:a41dc34788b12c26540266a99c03aa6aecbe70df7250b266676e5fce55f268b2"
+    },
+    {
+      "id": "replay_manifest_file",
+      "label": "Raw replay manifest",
+      "producer": "SHA-256 of exact manifest file bytes",
+      "run_field": "body.replay_manifest_file_sha256",
+      "value": "sha256:f994e398fe79f575daefbd566feb37c4b9dfcbe1db7838bb6218630b072d04d5"
+    },
+    {
+      "id": "run_id",
+      "label": "Complete run body",
+      "producer": "domain-separated canonical run body",
+      "run_field": "run_id",
+      "value": "sha256:b106034f37c834ee86f3c6086ced2855d46ff402aef16ff7c9235ab8fd4b7a08"
+    }
+  ],
+  "commands": {
+    "create": {
+      "argv": [
+        "python",
+        "-m",
+        "receipt_extractor.main",
+        "demo/inputs",
+        "--replay",
+        "demo/replay-manifest.json",
+        "--run-output",
+        "demo/evidence/replay-run.json"
+      ],
+      "exit_code": 0,
+      "normalized": "PYTHONPATH=demo/failures/provider-sentinel:src python -m receipt_extractor.main demo/inputs --replay demo/replay-manifest.json --run-output demo/evidence/replay-run.json",
+      "stderr": {
+        "artifact": null,
+        "bytes": 0,
+        "sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "artifact": null,
+        "bytes": 0,
+        "sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "verify": {
+      "argv": [
+        "python",
+        "-m",
+        "receipt_extractor.main",
+        "demo/inputs",
+        "--verify-run",
+        "demo/evidence/replay-run.json",
+        "--against-manifest",
+        "demo/replay-manifest.json"
+      ],
+      "exit_code": 0,
+      "normalized": "PYTHONPATH=demo/failures/provider-sentinel:src python -m receipt_extractor.main demo/inputs --verify-run demo/evidence/replay-run.json --against-manifest demo/replay-manifest.json",
+      "stderr": {
+        "artifact": null,
+        "bytes": 0,
+        "sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "artifact": "demo/evidence/run-verification.json",
+        "bytes": 70,
+        "sha256": "sha256:14a4cc7357c4031b9ae61da38c88d35d1ceed5e5442db082bb58f3b7e5d62484"
+      }
+    }
+  },
+  "environment": {
+    "OPENAI_API_KEY": "absent",
+    "PYTHONPATH_prefix": "demo/failures/provider-sentinel:src"
+  },
+  "privacy": "synthetic fixtures only; no provider request",
+  "schema_version": 1,
+  "sources": [
+    {
+      "bytes": 276,
+      "path": "MANIFEST.in",
+      "sha256": "sha256:ad1e49b91f0451148e4482f6be51351436cda8d103ac410da8ab600c61ff30f9"
+    },
+    {
+      "bytes": 1868,
+      "path": "Makefile",
+      "sha256": "sha256:340ff50a1843315b88d8c72cc75e86659e0b3d309b27c941a6298b52342fdb83"
+    },
+    {
+      "bytes": 18027,
+      "path": "README.md",
+      "sha256": "sha256:a0cd66eb14d3bae2486e19c3b93f0e619cfb8747b8eab4129c8ebabc95ac70ae"
+    },
+    {
+      "bytes": 13369,
+      "path": "docs/run-provenance.md",
+      "sha256": "sha256:d032b5090dda9c290aeb2e309e612a77d1c71c6b50b80cb22d38c093181967a0"
+    },
+    {
+      "bytes": 1607,
+      "path": "pyproject.toml",
+      "sha256": "sha256:3bce3451ef02f86c8831b0a89326dc3d5f2b27d6a8a07a7ebb742eda06222992"
+    },
+    {
+      "bytes": 144,
+      "path": "requirements-dev.txt",
+      "sha256": "sha256:3c77954a8c05de34d6a3bfdccac99277a26c20743e17077a15c099d4ae350c44"
+    },
+    {
+      "bytes": 47,
+      "path": "requirements.txt",
+      "sha256": "sha256:2996abad0c167cad8593023f15ff9a56eea6a2d07446146ca963e9efed722f88"
+    },
+    {
+      "bytes": 59776,
+      "path": "scripts/capture_demo.py",
+      "sha256": "sha256:2e5ae73db5601e1bf71ec4aa408004fef17b594d50bafc5eab6f2be786cf0073"
+    },
+    {
+      "bytes": 40,
+      "path": "src/receipt_extractor/__init__.py",
+      "sha256": "sha256:ac955f4b2e3e1472111db54d4b825198ad5c03e088b91aed5dc30a1116c5ca12"
+    },
+    {
+      "bytes": 8492,
+      "path": "src/receipt_extractor/artifact_io.py",
+      "sha256": "sha256:2fe4026a8dbe1938a688720bf216a960668e301059cf726d225212b16bdad6c6"
+    },
+    {
+      "bytes": 14643,
+      "path": "src/receipt_extractor/file_io.py",
+      "sha256": "sha256:95bf7b8f8e3db7c140b2e62e4adb96e11efe17a0e0277f66a719ef06e32e5b17"
+    },
+    {
+      "bytes": 1719,
+      "path": "src/receipt_extractor/gpt.py",
+      "sha256": "sha256:d73d1def5dacfe4ff47df141ef540636df800e030591b80f6d809bdf988d2db4"
+    },
+    {
+      "bytes": 20977,
+      "path": "src/receipt_extractor/main.py",
+      "sha256": "sha256:beaa51ee20689b4c5d9c54dd1662e2fce6c064d0df58ee322957cad622cecfe3"
+    },
+    {
+      "bytes": 16005,
+      "path": "src/receipt_extractor/provenance.py",
+      "sha256": "sha256:cdea806ad7b3a9d63c4cc66d054c363c31d6dddb1ad3c77f47f2ebc570568ccb"
+    },
+    {
+      "bytes": 9326,
+      "path": "src/receipt_extractor/replay.py",
+      "sha256": "sha256:8ad62d1d792ef1a57a1161cafa272a60a15d02955663965ff943b81adb8712a8"
+    },
+    {
+      "bytes": 2096,
+      "path": "src/receipt_extractor/schema.py",
+      "sha256": "sha256:9051056e0eab3533cee7af3fb535e6e7dcbc128253a5a9398f77c606a10c0602"
+    },
+    {
+      "bytes": 62,
+      "path": "tests/__init__.py",
+      "sha256": "sha256:c127c4ab230ccad709a0c417cb31860511c9cdd7c2ebe0f964b53ec167bc828c"
+    },
+    {
+      "bytes": 1111,
+      "path": "tests/conftest.py",
+      "sha256": "sha256:c027286277c27041105800b081716163b9fa5a6fb30a5c59598881627b8493ae"
+    },
+    {
+      "bytes": 3962,
+      "path": "tests/test_artifact_io.py",
+      "sha256": "sha256:5d6c491f8097b1ffa8f9c5c5518a96284785d6404bb6fbdd40728f506529d9f2"
+    },
+    {
+      "bytes": 20907,
+      "path": "tests/test_cli.py",
+      "sha256": "sha256:cb936d34040aba4e985396bb751d9dd76774f52f5e86a922367db5891573ed72"
+    },
+    {
+      "bytes": 14588,
+      "path": "tests/test_cli_provenance.py",
+      "sha256": "sha256:2cfd6201dc301c17e393a662a446ac25bf6c93488e554e1884a306b87cd004a6"
+    },
+    {
+      "bytes": 28272,
+      "path": "tests/test_demo_evidence.py",
+      "sha256": "sha256:f00f0aebe1e87b2e412b1a9b16cbd99290ac4dd01d3acd5175c156c926d38017"
+    },
+    {
+      "bytes": 12641,
+      "path": "tests/test_file_io.py",
+      "sha256": "sha256:ac0ada307872d9d81ff15efb185faa1207ecf4059dc7f24161c3633bfcd6bb49"
+    },
+    {
+      "bytes": 3289,
+      "path": "tests/test_gpt.py",
+      "sha256": "sha256:6ab831dffd9cb90638a6e628716f6c88e94931cf0d48289db5e33005464f18fa"
+    },
+    {
+      "bytes": 8442,
+      "path": "tests/test_main_internals.py",
+      "sha256": "sha256:f2b683e0f0c6f318335289b4403b60a74d1c587efbbc50d8b020aa0faa2b35d8"
+    },
+    {
+      "bytes": 25942,
+      "path": "tests/test_provenance.py",
+      "sha256": "sha256:270cc5f36c129911092d94da5efe59016aac5decacae36c261d63a72c6760987"
+    },
+    {
+      "bytes": 17239,
+      "path": "tests/test_replay.py",
+      "sha256": "sha256:309039c89dabdbce0166199b6a3f18daebc5b03fa8026c499fd88c21dd8f5296"
+    },
+    {
+      "bytes": 3092,
+      "path": "tests/test_schema.py",
+      "sha256": "sha256:de6b09abf4ead7dbab1b4935ccf36f00047bd5290b26e45e02ad09bc52c8c1d7"
+    }
+  ],
+  "verification_checks": [
+    "bounded pinned JSON reads",
+    "normal image preflight",
+    "exact ordered input names",
+    "strict typed output equality",
+    "current receipt schema"
+  ],
+  "verifier_edges": [
+    {
+      "binding": "input_batch",
+      "from": "current preflight descriptors",
+      "to": "manifest batch and run body"
+    },
+    {
+      "binding": "receipt_contract",
+      "from": "current receipt contract",
+      "to": "run body contract"
+    },
+    {
+      "binding": "replay_manifest_file",
+      "from": "exact manifest file bytes",
+      "to": "run body manifest digest"
+    },
+    {
+      "binding": "run_id",
+      "from": "complete canonical run body",
+      "to": "stored run identity"
+    }
+  ]
+}

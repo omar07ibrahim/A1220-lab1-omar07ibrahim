@@ -1,0 +1,35 @@
+{
+  "body": {
+    "contract": {
+      "digest": "sha256:a41dc34788b12c26540266a99c03aa6aecbe70df7250b266676e5fce55f268b2",
+      "id": "receipt-extractor/receipt-fields",
+      "schema_version": 1
+    },
+    "input_batch_digest": "sha256:5d45a0fe5c74d98491b6f88de8e3ec48fc5c7b7b00299d6e08e5e2f9b8a181a3",
+    "items": [
+      {
+        "input_name": "cafe-lumen.png",
+        "output": {
+          "amount": "$18.40",
+          "category": "Meals",
+          "date": "2026-07-24",
+          "vendor": "Cafe Lumen"
+        }
+      },
+      {
+        "input_name": "metro-line.webp",
+        "output": {
+          "amount": "$3.25",
+          "category": "Transport",
+          "date": "2026-07-24",
+          "vendor": "Metro Line"
+        }
+      }
+    ],
+    "mode": "replay",
+    "replay_manifest_file_sha256": "sha256:f994e398fe79f575daefbd566feb37c4b9dfcbe1db7838bb6218630b072d04d5"
+  },
+  "kind": "receipt-extractor-run",
+  "run_id": "sha256:b106034f37c834ee86f3c6086ced2855d46ff402aef16ff7c9235ab8fd4b7a08",
+  "schema_version": 1
+}

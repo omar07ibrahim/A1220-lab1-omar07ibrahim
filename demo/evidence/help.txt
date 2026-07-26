@@ -1,6 +1,8 @@
-usage: main.py [-h] [--dry-run | --replay MANIFEST.json] [--acknowledge-remote-upload]
+usage: main.py [-h] [--dry-run | --replay MANIFEST.json | --verify-run RUN.json]
+               [--against-manifest MANIFEST.json] [--acknowledge-remote-upload]
                [--max-files MAX_FILES] [--max-file-mib MAX_FILE_MIB]
-               [--max-total-mib MAX_TOTAL_MIB] [--output OUTPUT | --stdout]
+               [--max-total-mib MAX_TOTAL_MIB]
+               [--output OUTPUT | --stdout | --run-output RUN.json]
                dirpath
 
 Validate a bounded directory of receipt images and extract structured fields.
@@ -13,6 +15,10 @@ options:
   --dry-run             validate inputs and emit local audit metadata without importing OpenAI
   --replay MANIFEST.json
                         reproduce an exact recorded batch locally without importing OpenAI
+  --verify-run RUN.json
+                        verify a replay run locally without importing OpenAI
+  --against-manifest MANIFEST.json
+                        exact replay manifest file required by --verify-run
   --acknowledge-remote-upload
                         confirm that image bytes and embedded metadata may leave this machine
   --max-files MAX_FILES
@@ -23,3 +29,5 @@ options:
                         maximum encoded bytes across the batch in MiB (default: 50)
   --output OUTPUT       reserve a private JSON file; existing paths are never replaced
   --stdout, --print     explicitly emit extracted receipt fields to stdout
+  --run-output RUN.json
+                        reserve one private content-addressed replay run bundle

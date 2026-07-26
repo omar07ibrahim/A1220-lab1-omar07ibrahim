@@ -25,20 +25,32 @@ typecheck:
 	@MYPYPATH=src mypy --strict src tests scripts
 
 test:
-	@PYTHONPATH=src pytest \
+	@PYTEST_ADDOPTS= PYTHONPATH=src $(PYTHON) -m pytest \
 		--cov=receipt_extractor \
 		--cov-branch \
 		--cov-report=term-missing \
 		-q
 
-demo: test
-	@coverage json --pretty -o .venv/demo-coverage.json
+demo:
+	@PYTEST_ADDOPTS= PYTHONPATH=src $(PYTHON) -m pytest \
+		--ignore=tests/test_demo_evidence.py \
+		--cov=receipt_extractor \
+		--cov-branch \
+		--cov-report=term-missing \
+		-q
+	@$(PYTHON) -m coverage json --pretty -o .venv/demo-bootstrap-coverage.json
+	@PYTHONPATH=src $(PYTHON) scripts/capture_demo.py \
+		--output-root . \
+		--coverage-json .venv/demo-bootstrap-coverage.json
+	@$(MAKE) --no-print-directory test
+	@$(PYTHON) -m coverage json --pretty -o .venv/demo-coverage.json
 	@PYTHONPATH=src $(PYTHON) scripts/capture_demo.py \
 		--output-root . \
 		--coverage-json .venv/demo-coverage.json
+	@$(MAKE) --no-print-directory test
 
 demo-check: test
-	@coverage json --pretty -o .venv/demo-coverage.json
+	@$(PYTHON) -m coverage json --pretty -o .venv/demo-coverage.json
 	@if [ -d .venv/demo-check ]; then \
 		find .venv/demo-check -mindepth 1 -depth -delete; \
 	fi

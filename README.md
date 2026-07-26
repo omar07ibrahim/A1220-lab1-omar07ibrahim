@@ -2,15 +2,15 @@
 
 A privacy-explicit multimodal pipeline that validates an entire receipt-image
 batch before sending the first byte, parses model output into a strict schema,
-and can reproduce an exact recorded batch without OpenAI, a key, or a network
-request.
+can reproduce an exact recorded batch without OpenAI, and can create and verify
+a content-addressed local replay receipt.
 
-This repository began as a small A1220 lab. It is being rehabilitated through
-reviewable commits into a document-intelligence project with bounded inputs,
-typed outputs, deterministic replay, and evidence that does not rely on private
-receipts.
+This repository began as a small A1220 lab. Its original history remains
+visible; later reviewable commits turn it into a document-intelligence project
+with bounded inputs, typed outputs, deterministic replay, and evidence that
+does not rely on private receipts.
 
-![Six-step synthetic receipt demo: generate, inspect, preflight, replay, reject unsafe cases, and verify](docs/assets/demo.gif)
+![Seven-step synthetic receipt demo: generate, inspect, preflight, replay, bind provenance, reject unsafe cases, and verify](docs/assets/demo.gif)
 
 The animation above is rebuilt from the current source, generated fixtures,
 captured CLI streams, and coverage.py data. It is not a recording of a model
@@ -26,13 +26,17 @@ call, and the failure frame contains only deliberately synthetic cases.
 - The complete batch is preflighted before the first provider request.
 - OpenAI Responses parsing targets a strict four-field Pydantic contract.
 - Offline replay binds a versioned manifest to the exact ordered image batch.
+- Replay can emit one content-addressed run bundle that binds the batch,
+  contract, exact manifest bytes, ordered names, and typed outputs.
+- A separate offline mode verifies that bundle against current inputs and the
+  exact replay manifest without importing OpenAI.
 - Result files are private, exclusive, no-clobber reservations; stdout is
   opt-in.
 - Provider failures are redacted at the CLI boundary.
 
-The project does **not** claim live-model accuracy yet. Public tests and
-examples use synthetic images, and no live API call is needed to verify the
-engineering claims.
+The project does **not** claim live-model accuracy, authenticity, authorship, or
+proof that a model ran. Public tests and examples use synthetic images, and no
+live API call is needed to verify the engineering claims.
 
 ## Verified synthetic demo
 
@@ -55,8 +59,10 @@ evidence that a model read the images. The exact source artifacts are
 
 Replay and live extraction deliberately converge on the same `ReceiptFields`
 validation boundary. Dry-run stops after preflight and emits only audit
-metadata. Replay substitutes a strictly bound local provider; it does not
-weaken image preflight or output safety.
+metadata. Replay substitutes a strictly bound local provider and can either
+emit the existing result shape or build a single provenance bundle. Run
+verification recomputes four digest bindings plus ordered-name, typed-output,
+bounded-read, preflight, and schema checks.
 
 ## Setup
 
@@ -65,7 +71,8 @@ The supported runtime is Python 3.12 on Linux.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m pip install --no-deps -e .
 ```
 
 ![Actual source CLI help captured by the demo generator](docs/assets/cli-help.png)
@@ -74,13 +81,13 @@ Install the separately pinned development tools and run the complete offline
 gate:
 
 ```bash
-pip install -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
 make check
 ```
 
 `make audit` is intentionally separate because dependency-advisory lookup is a
 networked operation. The regular gate uses generated images and fake providers;
-it makes no model request. The current gate is 123 tests with 91% combined
+it makes no model request. The current gate is 221 tests with 93.26% combined
 statement and branch coverage.
 
 ![Coverage generated from the current coverage.py JSON](docs/assets/coverage.svg)
@@ -93,32 +100,15 @@ The bounded source data is checked in as
 Dry-run validates every direct-child image and prints only audit metadata:
 
 ```bash
-PYTHONPATH=src python -m receipt_extractor.main receipts --dry-run
-```
-
-```json
-{
-  "count": 2,
-  "mode": "dry-run",
-  "schema_version": 1,
-  "images": [
-    {
-      "height": 900,
-      "media_type": "image/png",
-      "name": "receipt-001.png",
-      "sha256": "…",
-      "size_bytes": 48122,
-      "width": 600
-    }
-  ]
-}
+PYTHONPATH=src python -m receipt_extractor.main demo/inputs --dry-run
 ```
 
 Names and digests are still sensitive metadata: filenames may contain personal
 information, and hashes can be correlatable. Dry-run output is inspection data,
 not automatically safe publication evidence.
 
-This capture is rendered from the actual command output stored in
+The complete actual two-image output—not a shortened illustrative object—is
+stored in
 [`demo/evidence/dry-run.json`](demo/evidence/dry-run.json):
 
 ![Actual dry-run CLI output for the two synthetic fixtures](docs/assets/cli-dry-run.png)
@@ -130,9 +120,9 @@ every receipt. Its batch digest is a domain-separated SHA-256 over the canonical
 ordered descriptors.
 
 ```bash
-PYTHONPATH=src python -m receipt_extractor.main receipts \
-  --replay replay-manifest.json \
-  --output replay-result.json
+PYTHONPATH=src python -m receipt_extractor.main demo/inputs \
+  --replay demo/replay-manifest.json \
+  --stdout
 ```
 
 Replay performs these steps before reserving the result:
@@ -158,6 +148,64 @@ The checked-in manifest produces this exact current output without a key or
 OpenAI import:
 
 ![Actual exact-batch replay CLI output](docs/assets/cli-replay.png)
+
+## Create and verify a content-addressed replay run
+
+Use a fresh private path under the local virtual environment to materialize the
+same synthetic replay as one content-addressed bundle:
+
+```bash
+PYTHONPATH=src python -m receipt_extractor.main demo/inputs \
+  --replay demo/replay-manifest.json \
+  --run-output .venv/replay-run.json
+PYTHONPATH=src python -m receipt_extractor.main demo/inputs \
+  --verify-run .venv/replay-run.json \
+  --against-manifest demo/replay-manifest.json
+```
+
+The first command intentionally prints nothing and creates one exclusive
+mode-`0600` file. The second accepts no output sink and prints only the fixed
+aggregate document:
+
+```json
+{
+  "mode": "verify-run",
+  "schema_version": 1,
+  "verified": true
+}
+```
+
+These are the two real production CLI commands captured here; the empty first
+stdout has not been replaced with an invented success message:
+
+![Actual replay-run creation command and fixed verification stdout](docs/assets/cli-provenance.png)
+
+The synthetic run binds four independently recomputed digest identities:
+
+1. the exact ordered preflighted input descriptors;
+2. the explicit versioned `ReceiptFields` contract;
+3. the raw bytes of the exact replay manifest file;
+4. the complete canonical run body, including ordered names and typed outputs.
+
+![Four actual digest bindings and their local verifier edges](docs/assets/provenance-bindings.svg)
+
+Verification also enforces bounded descriptor-pinned reads, normal image
+preflight, exact ordered names, strict typed-output equality with the manifest,
+and the current schema identity. The checked-in evidence is the actual
+[`replay-run.json`](demo/evidence/replay-run.json), fixed
+[`run-verification.json`](demo/evidence/run-verification.json), and generated
+[`provenance-source.json`](demo/evidence/provenance-source.json). That source
+file records normalized repository-relative argv, exit and stream hashes, all
+other generated artifact hashes, and hashes of the source and tests used to
+rebuild the evidence. The complete identity specification is
+[`docs/run-provenance.md`](docs/run-provenance.md).
+
+This is a replay-only local consistency receipt. It is not a signature,
+authenticity or authorship proof, trusted timestamp, model-execution proof, or
+accuracy result. A run bundle includes filenames and extracted receipt fields
+and can expose correlatable digests; protect a real bundle like the original
+receipts and replay manifest. The tracked bundle is safe to publish only
+because every input and output is deliberately synthetic.
 
 ## Run live extraction
 
@@ -206,10 +254,10 @@ organization's data controls before processing real receipts.
 
 ## Output safety
 
-`--output` reserves a brand-new `0600` `.json` file with `O_EXCL` before any
-live provider call. Existing regular files, links, FIFOs, and receipt inputs are
-never replaced. The parent must be owned by the current user, not group- or
-world-writable, and not a symlink.
+`--output` and `--run-output` reserve a brand-new `0600` `.json` file with
+`O_EXCL` before live extraction or replay materialization. Existing regular
+files, links, FIFOs, and receipt inputs are never replaced. The parent must be
+owned by the current user, not group- or world-writable, and not a symlink.
 
 Handled failures remove an uncommitted reservation when its identity can still
 be proven. If cleanup or directory durability cannot be confirmed, the CLI
@@ -266,6 +314,7 @@ damage the tracked sentinel while it is being detected.
 | Image parsing | exact PNG/JPEG/WebP bounds, full decode, frame and pixel limits | malware scanning or metadata removal |
 | Provider | explicit upload acknowledgement, bounded retries/timeout, typed response | model accuracy or zero retention |
 | Replay | exact ordered batch, strict manifest, pinned reads | signature, authenticity, or independent attestation |
+| Run provenance | four digest bindings, ordered names/outputs, current schema, exact manifest bytes | authorship, timestamp, model execution, or tamper-proof history |
 | Output | private no-clobber file, held descriptor, cleanup checks | atomic recovery from power or host failure |
 
 Caught provider exception text is not printed. This narrow guarantee does not
@@ -283,18 +332,29 @@ exact help transcript is also available as
 2. loads them through `file_io.load_images`;
 3. builds the canonical exact-batch manifest;
 4. executes the real help, dry-run, and replay commands with no API key;
-5. executes four expected failures, including live preflight guarded by a
+5. creates and verifies the replay-run bundle in a private scratch directory
+   with the poison provider first on `PYTHONPATH`;
+6. publishes the synthetic bundle only after successful local verification;
+7. executes four expected failures, including live preflight guarded by a
    poison provider import;
-6. records exact streams, normalized reproduction commands, output absence,
+8. records exact streams, normalized repository-relative argv, output absence,
    and no-clobber hashes;
-7. reads coverage.py JSON from the full test run;
-8. renders the terminal captures, diagrams, chart, failure gallery, and GIF.
+9. reads coverage.py JSON from the full test run;
+10. renders real terminal captures, diagrams, chart, failure gallery, and the
+    seven-frame GIF;
+11. records SHA-256 and byte size for every other generated artifact and
+    relevant source, then rejects any path outside the exact 27-file allowlist.
 
 Regenerate the tracked artifacts:
 
 ```bash
 make demo
 ```
+
+This command bootstraps from the non-evidence tests, rebuilds the generated
+tree, then runs the complete suite, regenerates from that full-suite coverage,
+and runs the complete suite again. The bootstrap rendering is transient; only
+the full-suite result remains in the tracked tree.
 
 Prove they are current without touching the tracked copies:
 
@@ -311,9 +371,11 @@ the evidence, the check fails until the visual refresh is intentional.
 
 ```text
 src/receipt_extractor/
+  artifact_io.py   # shared bounded, descriptor-pinned strict JSON reads
   file_io.py       # pinned-FD discovery, bounded reads, decode, and data URLs
   gpt.py           # typed OpenAI Responses adapter
   main.py          # CLI, provider boundary, result validation, private output
+  provenance.py    # contract identity, replay-run builder, local verifier
   replay.py        # exact-batch manifest loader and offline provider
   schema.py        # strict receipt and category contracts
 scripts/
@@ -321,14 +383,17 @@ scripts/
 demo/
   inputs/          # visibly synthetic PNG and lossless WebP receipts
   failures/        # corrupt batch, reversed manifest, provider tripwire, sink
-  evidence/        # exact CLI streams, failure ledger, and coverage summary
+  evidence/        # exact streams, run bundle, source hashes, and coverage
   replay-manifest.json
 docs/assets/       # generated README visuals; checked by make demo-check
 tests/
+  test_artifact_io.py      # strict JSON, links, bounds, and replacement attacks
   test_file_io.py          # real formats, limits, links, and TOCTOU regressions
   test_cli.py              # privacy modes, replay integration, output failures
-  test_demo_evidence.py    # manifest, captures, image/GIF/SVG integrity
+  test_cli_provenance.py   # creation/verification integration and no-clobber
+  test_demo_evidence.py    # re-execution, hashes, allowlist, GIF/SVG integrity
   test_gpt.py              # fake typed Responses calls; never a live request
+  test_provenance.py       # golden vectors and binding mutation matrix
   test_replay.py           # manifest grammar, path attacks, exact-batch binding
   test_schema.py           # strict field and category adversarial cases
 ```
