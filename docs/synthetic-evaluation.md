@@ -61,6 +61,24 @@ The exact expected totals are:
 Those ratios describe agreement with an authored control fixture. They are not
 estimates, confidence intervals, population metrics, or model-quality scores.
 
+## Aggregate evaluation receipt
+
+The evaluator emits integer counts rather than rounded floating-point scores.
+For each field it records the four outcome counts, then reconciles them against
+an all-field total, a five-bin histogram of records with zero through four exact
+fields, and a fixed-label category confusion matrix. The eight-case fixture has
+histogram `[0, 0, 6, 0, 2]`; its category matrix contains eight observations.
+
+The report binds the suite ID, input batch digest, evaluator contract, truth
+origin, and negative-control identity. Its domain-separated `report_id` covers
+the complete aggregate report body. It deliberately omits case-level rows and
+all free-text, date, and amount values; the fixed category taxonomy remains as
+confusion-matrix labels, and nonzero cells disclose aggregate truth/candidate
+category pairs. A one-case or sparse suite can therefore reveal individual
+category values. Ratios such as `20 / 32` field agreement and `2 / 8`
+exact-record agreement remain visibly derivable without duplicating or rounding
+their denominators.
+
 ## Identity and trust boundary
 
 `suite_id` is SHA-256 over a domain separator and canonical JSON containing the
@@ -68,7 +86,11 @@ suite kind, schema version, and complete semantic body. It is a deterministic
 mismatch guard, not a signature, authorship proof, timestamp, or tamper-proof
 record. The suite contains field values and input descriptors; a real suite
 would be sensitive even when its later aggregate evaluation receipt omits those
-values.
+values. The same trust limit applies to `report_id`. Suite and input digests are
+stable, linkable fingerprints, not anonymization; aggregate counts can also be
+sensitive when evaluated on real data. A standalone internally valid report ID
+does not prove that its metrics came from the named suite; verification must
+recompute the report from that suite and compare the complete result.
 
 The public demo must remain synthetic, offline, source-bound, and reproducible.
 Input names are direct-child basenames: absolute, parent-relative, nested, and

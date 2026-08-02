@@ -3,7 +3,7 @@
     {
       "bytes": 561,
       "path": "demo/evidence/coverage-summary.json",
-      "sha256": "sha256:be4a39973afb52b2ced2c55c17ba30c7adcbfbeade2a02682abb0dcaa3eae928"
+      "sha256": "sha256:b5fe110d4173c2cbef39f8d4553c7a815191b29fc5cfef6f333352010c8781c2"
     },
     {
       "bytes": 541,
@@ -101,14 +101,14 @@
       "sha256": "sha256:e5e1eecc65ba109f69586fdd39e9b91cd64de33f217ab6d0c93dbd96d52fb7ff"
     },
     {
-      "bytes": 54218,
+      "bytes": 54008,
       "path": "docs/assets/coverage.png",
-      "sha256": "sha256:466be6b4e0508abc91d8ec99b5652e35b315757b59e133d5a3f4fa7178efd36d"
+      "sha256": "sha256:6b07dd9a30da45f37cc94f19793b11030da20f857ac32691c316c4d25a01d6d1"
     },
     {
       "bytes": 3768,
       "path": "docs/assets/coverage.svg",
-      "sha256": "sha256:ca3a84b92f73a829d624955b455f4cc660ccd77605d6e8d9f8562ac20c2f6ca6"
+      "sha256": "sha256:f464ce1e92b8b53e5a177d271250e909cdb148770e359d5010cc8054c7d1ade3"
     },
     {
       "bytes": 80608,
@@ -116,9 +116,9 @@
       "sha256": "sha256:1112538c4bfb90cf6fa822fed677bb61f575a70ffd8644f50f64a4e9a7431af3"
     },
     {
-      "bytes": 457581,
+      "bytes": 457477,
       "path": "docs/assets/demo.gif",
-      "sha256": "sha256:b87e5e35eea870e7da037e964254941115e15172d12d191c170b416463e69760"
+      "sha256": "sha256:51a4349aa4f8e05136bce34ba9d9728d0f85d5abab449a0de4fc6b4d3b519c7b"
     },
     {
       "bytes": 140198,
