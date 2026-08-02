@@ -1,5 +1,5 @@
 {
-  "combined_percent": 93.26,
+  "combined_percent": 93.88,
   "command": "make check",
   "modules": [
     {
@@ -32,5 +32,5 @@
     }
   ],
   "schema_version": 1,
-  "test_count": 221
+  "test_count": 241
 }

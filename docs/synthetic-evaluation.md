@@ -1,0 +1,77 @@
+# Synthetic evaluation contract v1
+
+This contract calibrates an exact evaluator against repository-authored
+synthetic truth and one repository-authored deliberately imperfect negative
+control. It does not evaluate a live model and does not support an OCR or model
+accuracy claim.
+
+## Comparison boundary
+
+Every truth and candidate object must first pass the same strict
+`ReceiptFields` boundary used by live extraction and offline replay. Comparison
+then uses exact typed equality in this fixed order:
+
+1. `date`
+2. `amount`
+3. `vendor`
+4. `category`
+
+There is no date parsing, currency normalization, fuzzy vendor matching,
+Unicode normalization, tolerance, embedding similarity, or locale inference.
+Surrounding whitespace and blank-to-null behavior come only from the existing
+`ReceiptFields` validation contract.
+
+Each field has exactly one outcome:
+
+- `exact`: both validated values are equal, including `null == null`;
+- `omission`: truth is non-null and the control is null;
+- `spurious`: truth is null and the control is non-null;
+- `substitution`: both values are non-null and unequal.
+
+The pinned evaluator-contract identity covers that boundary, the exact
+`ReceiptFields` contract digest, the field and outcome order, and the
+category-confusion label order. A separate domain-separated suite identity
+covers the evaluator identity and the complete ordered semantic suite. The
+suite also binds exact image descriptors through the existing replay batch
+digest.
+
+## Balanced calibration fixture
+
+Version 1 uses eight visibly synthetic cases. The negative control is authored
+so every field exercises every error branch exactly once while two records stay
+fully exact:
+
+| Case | date | amount | vendor | category |
+| --- | --- | --- | --- | --- |
+| `exact-cafe` | exact | exact | exact | exact |
+| `metro-amount-category` | exact | substitution | exact | omission |
+| `hotel-date-vendor` | omission | exact | substitution | exact |
+| `office-date-amount` | substitution | omission | exact | exact |
+| `cinema-vendor-category` | exact | exact | omission | substitution |
+| `exact-kiosk` | exact | exact | exact | exact |
+| `null-date-vendor` | spurious | exact | spurious | exact |
+| `null-amount-category` | exact | spurious | exact | spurious |
+
+The exact expected totals are:
+
+- each field: `5 exact / 1 omission / 1 spurious / 1 substitution`;
+- all field slots: `20 exact / 32 total`;
+- completely exact records: `2 / 8`.
+
+Those ratios describe agreement with an authored control fixture. They are not
+estimates, confidence intervals, population metrics, or model-quality scores.
+
+## Identity and trust boundary
+
+`suite_id` is SHA-256 over a domain separator and canonical JSON containing the
+suite kind, schema version, and complete semantic body. It is a deterministic
+mismatch guard, not a signature, authorship proof, timestamp, or tamper-proof
+record. The suite contains field values and input descriptors; a real suite
+would be sensitive even when its later aggregate evaluation receipt omits those
+values.
+
+The public demo must remain synthetic, offline, source-bound, and reproducible.
+Input names are direct-child basenames: absolute, parent-relative, nested, and
+Windows-style paths are rejected. No API key, provider import, network request,
+wall-clock measurement, random sample, hostname, PID, or absolute path belongs
+in the suite or its evidence.
