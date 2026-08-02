@@ -5,6 +5,7 @@ include pyproject.toml
 include requirements.txt
 include requirements-dev.txt
 include docs/run-provenance.md
+include docs/synthetic-evaluation.md
 recursive-include demo *
 recursive-include docs/assets *
 recursive-include scripts *.py

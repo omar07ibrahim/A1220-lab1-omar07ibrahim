@@ -79,6 +79,24 @@ category values. Ratios such as `20 / 32` field agreement and `2 / 8`
 exact-record agreement remain visibly derivable without duplicating or rounding
 their denominators.
 
+## Offline CLI
+
+The separate evaluator entry point never imports a provider and needs no API
+key or network access:
+
+```console
+receipt-evaluator evaluate SUITE.json --format json
+receipt-evaluator evaluate SUITE.json --format text
+receipt-evaluator verify SUITE.json REPORT.json
+```
+
+JSON is the default evaluation format. Text output keeps exact integer ratios
+instead of adding lossy percentages. Verification reloads both bounded files,
+recomputes the complete report from the suite, and compares canonical report
+bytes. Success emits only a fixed three-field verification object. Validation
+failures return status 2 with a data-free message; output failures return status
+1 without exposing paths or suite contents.
+
 ## Identity and trust boundary
 
 `suite_id` is SHA-256 over a domain separator and canonical JSON containing the

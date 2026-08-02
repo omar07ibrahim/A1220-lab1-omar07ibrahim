@@ -8,6 +8,7 @@ import json
 from collections.abc import Sequence
 from enum import StrEnum
 from itertools import islice
+from pathlib import Path
 from typing import Annotated, Any, Final, Literal, NoReturn, Self
 
 from pydantic import (
@@ -19,6 +20,11 @@ from pydantic import (
     model_validator,
 )
 
+from receipt_extractor.artifact_io import (
+    ArtifactIOError,
+    ArtifactIOErrorCode,
+    load_json_artifact,
+)
 from receipt_extractor.file_io import MAX_DIRECTORY_ENTRIES
 from receipt_extractor.provenance import receipt_contract_digest
 from receipt_extractor.replay import ReplayInputDescriptor, batch_digest
@@ -84,6 +90,40 @@ _ConfusionRow = Annotated[
     tuple[_NonNegativeInt, ...],
     Field(min_length=len(CATEGORY_LABELS), max_length=len(CATEGORY_LABELS)),
 ]
+
+_ARTIFACT_ERROR_DETAILS: Final = {
+    ArtifactIOErrorCode.INVALID_SIZE_LIMIT: "size limit is invalid",
+    ArtifactIOErrorCode.PATH_NOT_ENCODABLE: "path is not safely encodable",
+    ArtifactIOErrorCode.PATH_CONTROL_CHARACTER: (
+        "path contains a control or format character"
+    ),
+    ArtifactIOErrorCode.JSON_PATH_REQUIRED: "path must name a .json file",
+    ArtifactIOErrorCode.PARENT_TRAVERSAL: ("path must not traverse a parent directory"),
+    ArtifactIOErrorCode.PARENT_ADVANCE_FAILED: (
+        "parent directory could not be traversed safely"
+    ),
+    ArtifactIOErrorCode.PARENT_OPEN_FAILED: (
+        "parent directory could not be opened safely"
+    ),
+    ArtifactIOErrorCode.BOUNDED_REGULAR_FILE_REQUIRED: (
+        "must be a bounded single-link regular file"
+    ),
+    ArtifactIOErrorCode.FILE_CHANGED_BEFORE_OPEN: ("changed before it was opened"),
+    ArtifactIOErrorCode.FILE_CHANGED_DURING_READ: "changed while it was read",
+    ArtifactIOErrorCode.PATH_CHANGED_DURING_VALIDATION: (
+        "path changed during validation"
+    ),
+    ArtifactIOErrorCode.READ_FAILED: "could not be read safely",
+    ArtifactIOErrorCode.CLOSE_FAILED: "could not be closed safely",
+    ArtifactIOErrorCode.INVALID_UTF8: "must use strict UTF-8",
+    ArtifactIOErrorCode.UTF8_BOM: "must not contain a UTF-8 BOM",
+    ArtifactIOErrorCode.DUPLICATE_JSON_KEY: "contains a duplicate JSON key",
+    ArtifactIOErrorCode.NONFINITE_JSON_VALUE: "contains a non-finite JSON value",
+    ArtifactIOErrorCode.INVALID_JSON: "does not contain valid JSON",
+}
+
+if set(_ARTIFACT_ERROR_DETAILS) != set(ArtifactIOErrorCode):  # pragma: no cover
+    raise RuntimeError("evaluation artifact error mapping is incomplete")
 
 
 class EvaluationError(ValueError):
@@ -717,4 +757,120 @@ def evaluation_report_json(report: EvaluationReport) -> str:
     except (EvaluationError, RecursionError, UnicodeError, ValueError) as error:
         raise EvaluationError(
             "could not serialize evaluation report schema v1"
+        ) from error
+
+
+def _load_evaluation_model[ModelT: BaseModel](
+    path: Path,
+    model_type: type[ModelT],
+    *,
+    label: str,
+) -> ModelT:
+    if not isinstance(path, Path):
+        _fail(f"{label} path is invalid")
+    try:
+        artifact = load_json_artifact(path, max_bytes=MAX_EVALUATION_BYTES)
+    except ArtifactIOError as error:
+        raise EvaluationError(
+            f"{label} {_ARTIFACT_ERROR_DETAILS[error.code]}"
+        ) from error
+    try:
+        return model_type.model_validate_json(artifact.raw_bytes, strict=True)
+    except (RecursionError, UnicodeError, ValueError, ValidationError) as error:
+        raise EvaluationError(f"{label} does not match schema v1") from error
+
+
+def load_evaluation_suite(path: Path) -> EvaluationSuite:
+    """Load one bounded, link-safe, content-addressed suite document."""
+
+    return _load_evaluation_model(
+        path,
+        EvaluationSuite,
+        label="the evaluation suite",
+    )
+
+
+def load_evaluation_report(path: Path) -> EvaluationReport:
+    """Load one bounded, link-safe, internally reconciled report document."""
+
+    return _load_evaluation_model(
+        path,
+        EvaluationReport,
+        label="the evaluation report",
+    )
+
+
+def verify_evaluation_report(
+    *,
+    suite: EvaluationSuite,
+    report: EvaluationReport,
+) -> None:
+    """Recompute and compare the complete report for an exact suite."""
+
+    validated_suite = _validated_model(
+        suite,
+        EvaluationSuite,
+        label="the evaluation suite",
+    )
+    validated_report = _validated_model(
+        report,
+        EvaluationReport,
+        label="the evaluation report",
+    )
+    expected = evaluate_suite(validated_suite)
+    expected_bytes = _canonical_json_bytes(expected.model_dump(mode="json"))
+    supplied_bytes = _canonical_json_bytes(validated_report.model_dump(mode="json"))
+    if not hmac.compare_digest(supplied_bytes, expected_bytes):
+        _fail("the evaluation report does not match the exact suite")
+
+
+def evaluation_report_text(report: EvaluationReport) -> str:
+    """Render a deterministic human view derived from one validated report."""
+
+    try:
+        validated = _validated_model(
+            report,
+            EvaluationReport,
+            label="the evaluation report",
+        )
+        metrics = validated.body.metrics
+        exact_records = metrics.record_exact_field_histogram[len(FIELD_ORDER)]
+        lines = [
+            "Authored negative-control calibration (not model accuracy)",
+            f"suite_id: {validated.body.suite_id}",
+            f"report_id: {validated.report_id}",
+            f"evaluator_digest: {validated.body.evaluator.digest}",
+            f"cases: {metrics.case_count}",
+            (f"field_agreement: {metrics.all_fields.exact}/{metrics.all_fields.total}"),
+            (f"exact_records: {exact_records}/{metrics.case_count}"),
+            "record_exact_field_histogram (bins 0..4): "
+            + ", ".join(str(value) for value in metrics.record_exact_field_histogram),
+            "",
+            "field outcomes",
+            "  field             exact  omission  spurious  substitution",
+        ]
+        lines.extend(
+            "  "
+            f"{item.field:<16}"
+            f"{item.outcomes.exact:>5}"
+            f"{item.outcomes.omission:>10}"
+            f"{item.outcomes.spurious:>10}"
+            f"{item.outcomes.substitution:>14}"
+            for item in metrics.per_field
+        )
+        lines.extend(
+            (
+                "",
+                "category confusion (truth -> candidate; nonzero cells)",
+            )
+        )
+        for row, truth_label in enumerate(metrics.category_confusion.labels):
+            for column, candidate_label in enumerate(metrics.category_confusion.labels):
+                count = metrics.category_confusion.matrix[row][column]
+                if count:
+                    lines.append(f"  {truth_label} -> {candidate_label}: {count}")
+        return "\n".join(lines) + "\n"
+    except (EvaluationError, RecursionError, UnicodeError, ValueError) as error:
+        raise EvaluationError(
+            "could not serialize evaluation report text v1"
         ) from error
