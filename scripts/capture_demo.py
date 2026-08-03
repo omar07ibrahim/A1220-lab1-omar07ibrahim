@@ -21,7 +21,8 @@ from typing import Any, TypedDict
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from receipt_extractor import file_io, replay
+from receipt_extractor import evaluation, file_io, replay
+from receipt_extractor.schema import ExpenseCategory, ReceiptFields
 
 CANVAS = "#0b1020"
 PANEL = "#121a2e"
@@ -36,10 +37,14 @@ PURPLE = "#a78bfa"
 RECEIPT = "#fffdf7"
 INK = "#172033"
 RECEIPT_MUTED = "#657087"
+RECEIPT_ALERT = "#92243a"
 
 EXPECTED_DEMO_FILES = (
     "demo/evidence/coverage-summary.json",
     "demo/evidence/dry-run.json",
+    "demo/evidence/evaluation-receipt.json",
+    "demo/evidence/evaluation-receipt.txt",
+    "demo/evidence/evaluation-verification.json",
     "demo/evidence/failure-paths.json",
     "demo/evidence/help.txt",
     "demo/evidence/provenance-source.json",
@@ -51,6 +56,15 @@ EXPECTED_DEMO_FILES = (
     "demo/failures/existing-output.json",
     "demo/failures/provider-sentinel/openai.py",
     "demo/failures/reversed-replay-manifest.json",
+    "demo/evaluation-inputs/01-exact-cafe.png",
+    "demo/evaluation-inputs/02-metro-amount-category.png",
+    "demo/evaluation-inputs/03-hotel-date-vendor.png",
+    "demo/evaluation-inputs/04-office-date-amount.png",
+    "demo/evaluation-inputs/05-cinema-vendor-category.png",
+    "demo/evaluation-inputs/06-exact-kiosk.png",
+    "demo/evaluation-inputs/07-null-date-vendor.png",
+    "demo/evaluation-inputs/08-null-amount-category.png",
+    "demo/evaluation-suite.json",
     "demo/inputs/cafe-lumen.png",
     "demo/inputs/metro-line.webp",
     "demo/replay-manifest.json",
@@ -65,6 +79,11 @@ EXPECTED_ASSET_FILES = (
     "docs/assets/coverage.svg",
     "docs/assets/demo-receipts.png",
     "docs/assets/demo.gif",
+    "docs/assets/evaluation-bindings.svg",
+    "docs/assets/evaluation-confusion.svg",
+    "docs/assets/evaluation-fixtures.png",
+    "docs/assets/evaluation-scorecard.svg",
+    "docs/assets/cli-evaluation.png",
     "docs/assets/failure-boundaries.png",
     "docs/assets/provenance-bindings.svg",
 )
@@ -76,6 +95,7 @@ PROVENANCE_SOURCE_FILES = tuple(
             "Makefile",
             "README.md",
             "docs/run-provenance.md",
+            "docs/synthetic-evaluation.md",
             "pyproject.toml",
             "requirements-dev.txt",
             "requirements.txt",
@@ -83,6 +103,8 @@ PROVENANCE_SOURCE_FILES = tuple(
             "src/receipt_extractor/__init__.py",
             "src/receipt_extractor/artifact_io.py",
             "src/receipt_extractor/file_io.py",
+            "src/receipt_extractor/evaluation.py",
+            "src/receipt_extractor/evaluation_cli.py",
             "src/receipt_extractor/gpt.py",
             "src/receipt_extractor/main.py",
             "src/receipt_extractor/provenance.py",
@@ -95,6 +117,10 @@ PROVENANCE_SOURCE_FILES = tuple(
             "tests/test_cli_provenance.py",
             "tests/test_demo_evidence.py",
             "tests/test_file_io.py",
+            "tests/test_evaluation_cli.py",
+            "tests/test_evaluation_io.py",
+            "tests/test_evaluation_report.py",
+            "tests/test_evaluation_suite.py",
             "tests/test_gpt.py",
             "tests/test_main_internals.py",
             "tests/test_provenance.py",
@@ -160,6 +186,23 @@ class _ProvenanceCapture(TypedDict):
     source: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class _EvaluationFixtureSpec:
+    case_id: str
+    filename: str
+    truth: ReceiptFields
+    candidate: ReceiptFields
+
+
+@dataclass(frozen=True, slots=True)
+class _EvaluationCapture:
+    suite: evaluation.EvaluationSuite
+    report: evaluation.EvaluationReport
+    json_output: str
+    text_output: str
+    verification_output: str
+
+
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Use Pillow's pinned bundled font instead of a host font."""
     return ImageFont.load_default(size=size)
@@ -202,7 +245,12 @@ def _receipt(
         width=3,
     )
     _centered(
-        draw, 68, "SYNTHETIC - NOT A REAL RECEIPT", width=width, size=19, fill=RED
+        draw,
+        68,
+        "SYNTHETIC - NOT A REAL RECEIPT",
+        width=width,
+        size=19,
+        fill=RED,
     )
     _centered(draw, 126, vendor.upper(), width=width, size=44, fill=INK)
     _centered(draw, 188, subtitle, width=width, size=22, fill=RECEIPT_MUTED)
@@ -289,6 +337,239 @@ def _save_inputs(input_dir: Path) -> None:
         quality=100,
         method=6,
     )
+
+
+def _fields(
+    date: str | None,
+    amount: str | None,
+    vendor: str | None,
+    category: ExpenseCategory | None,
+) -> ReceiptFields:
+    return ReceiptFields(
+        date=date,
+        amount=amount,
+        vendor=vendor,
+        category=category,
+    )
+
+
+def _evaluation_fixture_specs() -> tuple[_EvaluationFixtureSpec, ...]:
+    return (
+        _EvaluationFixtureSpec(
+            case_id="exact-cafe",
+            filename="01-exact-cafe.png",
+            truth=_fields(
+                "2026-07-24",
+                "$18.40",
+                "Cafe Lumen",
+                ExpenseCategory.MEALS,
+            ),
+            candidate=_fields(
+                "2026-07-24",
+                "$18.40",
+                "Cafe Lumen",
+                ExpenseCategory.MEALS,
+            ),
+        ),
+        _EvaluationFixtureSpec(
+            case_id="metro-amount-category",
+            filename="02-metro-amount-category.png",
+            truth=_fields(
+                "2026-07-25",
+                "$3.25",
+                "Metro Line",
+                ExpenseCategory.TRANSPORT,
+            ),
+            candidate=_fields(
+                "2026-07-25",
+                "$3.52",
+                "Metro Line",
+                None,
+            ),
+        ),
+        _EvaluationFixtureSpec(
+            case_id="hotel-date-vendor",
+            filename="03-hotel-date-vendor.png",
+            truth=_fields(
+                "2026-07-26",
+                "$142.00",
+                "Northstar Hotel",
+                ExpenseCategory.LODGING,
+            ),
+            candidate=_fields(
+                None,
+                "$142.00",
+                "North Star Hotel",
+                ExpenseCategory.LODGING,
+            ),
+        ),
+        _EvaluationFixtureSpec(
+            case_id="office-date-amount",
+            filename="04-office-date-amount.png",
+            truth=_fields(
+                "2026-07-27",
+                "$27.80",
+                "Paper Square",
+                ExpenseCategory.OFFICE_SUPPLIES,
+            ),
+            candidate=_fields(
+                "2026-07-17",
+                None,
+                "Paper Square",
+                ExpenseCategory.OFFICE_SUPPLIES,
+            ),
+        ),
+        _EvaluationFixtureSpec(
+            case_id="cinema-vendor-category",
+            filename="05-cinema-vendor-category.png",
+            truth=_fields(
+                "2026-07-28",
+                "$14.00",
+                "Orbit Cinema",
+                ExpenseCategory.ENTERTAINMENT,
+            ),
+            candidate=_fields(
+                "2026-07-28",
+                "$14.00",
+                None,
+                ExpenseCategory.MEALS,
+            ),
+        ),
+        _EvaluationFixtureSpec(
+            case_id="exact-kiosk",
+            filename="06-exact-kiosk.png",
+            truth=_fields(
+                "2026-07-29",
+                "$9.90",
+                "Civic Kiosk",
+                ExpenseCategory.OTHER,
+            ),
+            candidate=_fields(
+                "2026-07-29",
+                "$9.90",
+                "Civic Kiosk",
+                ExpenseCategory.OTHER,
+            ),
+        ),
+        _EvaluationFixtureSpec(
+            case_id="null-date-vendor",
+            filename="07-null-date-vendor.png",
+            truth=_fields(None, "$6.75", None, ExpenseCategory.OTHER),
+            candidate=_fields(
+                "2026-07-30",
+                "$6.75",
+                "Unnamed Stall",
+                ExpenseCategory.OTHER,
+            ),
+        ),
+        _EvaluationFixtureSpec(
+            case_id="null-amount-category",
+            filename="08-null-amount-category.png",
+            truth=_fields("2026-07-31", None, "Pop-up Booth", None),
+            candidate=_fields(
+                "2026-07-31",
+                "$12.00",
+                "Pop-up Booth",
+                ExpenseCategory.OTHER,
+            ),
+        ),
+    )
+
+
+def _evaluation_value(value: object) -> str:
+    if value is None:
+        return "<NOT PRINTED>"
+    if isinstance(value, ExpenseCategory):
+        return value.value
+    return str(value)
+
+
+def _evaluation_receipt(spec: _EvaluationFixtureSpec) -> Image.Image:
+    width, height = 720, 900
+    image = Image.new("RGB", (width, height), RECEIPT)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        (18, 18, width - 18, height - 18),
+        radius=26,
+        outline="#d5d9e2",
+        width=3,
+    )
+    _centered(
+        draw,
+        58,
+        "SYNTHETIC EVALUATION FIXTURE",
+        width=width,
+        size=22,
+        fill=RECEIPT_ALERT,
+    )
+    _centered(draw, 112, spec.case_id, width=width, size=34, fill=INK)
+    _centered(
+        draw,
+        166,
+        "Repository-authored truth; never a model output",
+        width=width,
+        size=18,
+        fill=RECEIPT_MUTED,
+    )
+    draw.line((66, 222, width - 66, 222), fill="#cfd5df", width=3)
+    draw.text((72, 264), "AUTHORED TRUTH", font=_font(24), fill=INK)
+
+    rows = (
+        ("DATE", spec.truth.date),
+        ("AMOUNT", spec.truth.amount),
+        ("VENDOR", spec.truth.vendor),
+        ("CATEGORY", spec.truth.category),
+    )
+    y = 330
+    for label, raw_value in rows:
+        value = _evaluation_value(raw_value)
+        draw.rounded_rectangle(
+            (66, y - 14, width - 66, y + 76),
+            radius=16,
+            fill="#f3f6fb",
+            outline="#d6dde9",
+            width=2,
+        )
+        draw.text((88, y + 9), label, font=_font(19), fill=RECEIPT_MUTED)
+        value_width = _text_width(draw, value, size=23)
+        draw.text(
+            (width - 88 - value_width, y + 6),
+            value,
+            font=_font(23),
+            fill=RECEIPT_ALERT if raw_value is None else INK,
+        )
+        y += 112
+
+    _centered(
+        draw,
+        800,
+        "Candidate values live only in evaluation-suite.json",
+        width=width,
+        size=18,
+        fill=RECEIPT_MUTED,
+    )
+    _centered(
+        draw,
+        835,
+        "Generated deterministically by scripts/capture_demo.py",
+        width=width,
+        size=17,
+        fill=RECEIPT_MUTED,
+    )
+    return image
+
+
+def _save_evaluation_inputs(
+    input_dir: Path,
+    specs: Sequence[_EvaluationFixtureSpec],
+) -> None:
+    input_dir.mkdir(parents=True, exist_ok=True)
+    for spec in specs:
+        _evaluation_receipt(spec).save(
+            input_dir / spec.filename,
+            format="PNG",
+            compress_level=9,
+        )
 
 
 def _manifest_document(images: Sequence[file_io.ImagePayload]) -> dict[str, Any]:
@@ -386,6 +667,147 @@ def _run(
             "stderr intentionally suppressed"
         )
     return completed.stdout
+
+
+def _execute_evaluator(
+    repository: Path,
+    arguments: Sequence[str],
+    *,
+    sentinel: Path,
+) -> _CompletedCommand:
+    environment = os.environ.copy()
+    environment.pop("OPENAI_API_KEY", None)
+    environment.pop("PYTEST_ADDOPTS", None)
+    environment["COLUMNS"] = "96"
+    environment["LINES"] = "30"
+    environment["LC_ALL"] = "C.UTF-8"
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(sentinel), str(repository / "src"))
+    )
+    completed = subprocess.run(
+        [sys.executable, "-m", "receipt_extractor.evaluation_cli", *arguments],
+        cwd=repository,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    return _CompletedCommand(
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+def _successful_evaluator_command(completed: _CompletedCommand) -> str:
+    if completed.returncode != 0 or completed.stderr:
+        raise RuntimeError(
+            f"evaluation evidence command failed with status "
+            f"{completed.returncode}; stderr intentionally suppressed"
+        )
+    return completed.stdout
+
+
+def _capture_evaluation_evidence(
+    *,
+    repository: Path,
+    demo_dir: Path,
+    input_dir: Path,
+    evidence_dir: Path,
+    specs: Sequence[_EvaluationFixtureSpec],
+) -> _EvaluationCapture:
+    images = file_io.load_images(input_dir)
+    image_by_name = {image.name: image for image in images}
+    expected_names = [spec.filename for spec in specs]
+    if [image.name for image in images] != expected_names:
+        raise RuntimeError("evaluation input order does not match fixture order")
+
+    cases = tuple(
+        evaluation.EvaluationCase(
+            case_id=spec.case_id,
+            input=replay.descriptor_for(image_by_name[spec.filename]),
+            truth=spec.truth,
+            candidate=spec.candidate,
+        )
+        for spec in specs
+    )
+    suite = evaluation.build_evaluation_suite(
+        name="balanced-authored-negative-control-v1",
+        cases=cases,
+    )
+    suite_path = demo_dir / "evaluation-suite.json"
+    suite_path.write_text(
+        evaluation.evaluation_suite_json(suite),
+        encoding="ascii",
+    )
+
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    report_path = evidence_dir / "evaluation-receipt.json"
+    text_path = evidence_dir / "evaluation-receipt.txt"
+    verification_path = evidence_dir / "evaluation-verification.json"
+    scratch_parent = repository / ".venv" / "evidence-scratch"
+    scratch_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="evaluation-boundary-",
+        dir=scratch_parent,
+    ) as temporary:
+        sentinel = Path(temporary)
+        (sentinel / "openai.py").write_text(
+            'raise RuntimeError("provider import crossed during evaluation")\n',
+            encoding="ascii",
+        )
+        (sentinel / "sitecustomize.py").write_text(
+            "import socket\n"
+            "def _blocked(*_args, **_kwargs):\n"
+            "    raise RuntimeError('network crossed during evaluation')\n"
+            "socket.socket = _blocked\n"
+            "socket.create_connection = _blocked\n",
+            encoding="ascii",
+        )
+
+        json_output = _successful_evaluator_command(
+            _execute_evaluator(
+                repository,
+                ("evaluate", str(suite_path)),
+                sentinel=sentinel,
+            )
+        )
+        text_output = _successful_evaluator_command(
+            _execute_evaluator(
+                repository,
+                ("evaluate", str(suite_path), "--format", "text"),
+                sentinel=sentinel,
+            )
+        )
+        report_path.write_text(json_output, encoding="ascii")
+        report = evaluation.load_evaluation_report(report_path)
+        loaded_suite = evaluation.load_evaluation_suite(suite_path)
+        evaluation.verify_evaluation_report(suite=loaded_suite, report=report)
+        if loaded_suite != suite:
+            raise RuntimeError("evaluation suite changed during persisted reload")
+        if json_output != evaluation.evaluation_report_json(report):
+            raise RuntimeError("evaluation JSON presentation drifted")
+        if text_output != evaluation.evaluation_report_text(report):
+            raise RuntimeError("evaluation text presentation drifted")
+
+        verification_output = _successful_evaluator_command(
+            _execute_evaluator(
+                repository,
+                ("verify", str(suite_path), str(report_path)),
+                sentinel=sentinel,
+            )
+        )
+
+    text_path.write_text(text_output, encoding="ascii")
+    verification_path.write_text(verification_output, encoding="ascii")
+    return _EvaluationCapture(
+        suite=loaded_suite,
+        report=report,
+        json_output=json_output,
+        text_output=text_output,
+        verification_output=verification_output,
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -1066,6 +1488,141 @@ def _receipt_montage(input_dir: Path) -> Image.Image:
     return image
 
 
+def _evaluation_fixture_montage(
+    input_dir: Path,
+    capture: _EvaluationCapture,
+) -> Image.Image:
+    width, height = 1440, 1040
+    image = Image.new("RGB", (width, height), CANVAS)
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (62, 44),
+        "Eight content-addressed evaluation inputs",
+        font=_font(40),
+        fill=TEXT,
+    )
+    draw.text(
+        (64, 98),
+        "Actual PNG bytes loaded by production preflight and bound into the suite",
+        font=_font(22),
+        fill=MUTED,
+    )
+
+    for index, case in enumerate(capture.suite.body.cases):
+        column = index % 4
+        row = index // 4
+        x = 54 + column * 348
+        y = 154 + row * 424
+        draw.rounded_rectangle(
+            (x, y, x + 316, y + 390),
+            radius=22,
+            fill=PANEL,
+            outline="#293653",
+            width=2,
+        )
+        with Image.open(input_dir / case.input.name) as receipt:
+            rendered = ImageOps.contain(receipt.convert("RGB"), (226, 282))
+        image.paste(
+            rendered,
+            (
+                x + (316 - rendered.width) // 2,
+                y + 18 + (282 - rendered.height) // 2,
+            ),
+        )
+        draw.text(
+            (x + 18, y + 314),
+            case.case_id,
+            font=_font(17),
+            fill=CYAN,
+        )
+        draw.text(
+            (x + 18, y + 341),
+            f"{case.input.size_bytes} bytes · sha256 {case.input.sha256[:12]}…",
+            font=_font(15),
+            fill=MUTED,
+        )
+        draw.text(
+            (x + 18, y + 366),
+            f"{case.input.width}x{case.input.height} PNG",
+            font=_font(15),
+            fill=MUTED,
+        )
+
+    draw.text(
+        (64, 1000),
+        f"suite_id  {capture.suite.suite_id}",
+        font=_font(17),
+        fill=GREEN,
+    )
+    return image
+
+
+def _evaluation_terminal_capture(capture: _EvaluationCapture) -> Image.Image:
+    evaluate_lines = _wrapped_lines(
+        "$ PYTHONPATH=src python -m receipt_extractor.evaluation_cli evaluate "
+        "demo/evaluation-suite.json --format text",
+        width=105,
+    )
+    output_lines = _wrapped_lines(capture.text_output, width=105)
+    verify_lines = _wrapped_lines(
+        "$ PYTHONPATH=src python -m receipt_extractor.evaluation_cli verify "
+        "demo/evaluation-suite.json demo/evidence/evaluation-receipt.json",
+        width=105,
+    )
+    verification_lines = _wrapped_lines(capture.verification_output, width=105)
+    line_height = 27
+    height = max(
+        760,
+        130
+        + (
+            len(evaluate_lines)
+            + len(output_lines)
+            + len(verify_lines)
+            + len(verification_lines)
+            + 5
+        )
+        * line_height,
+    )
+    image = Image.new("RGB", (1440, height), CANVAS)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        (24, 24, 1416, height - 24),
+        radius=24,
+        fill=PANEL,
+        outline="#293653",
+        width=2,
+    )
+    for x, color in ((58, RED), (84, AMBER), (110, GREEN)):
+        draw.ellipse((x - 8, 50, x + 8, 66), fill=color)
+    draw.text(
+        (136, 43),
+        "Actual offline evaluation and full recomputation",
+        font=_font(22),
+        fill=TEXT,
+    )
+    draw.line((42, 86, 1398, 86), fill="#293653", width=2)
+
+    y = 108
+    for line in evaluate_lines:
+        draw.text((58, y), line, font=_font(19), fill=GREEN)
+        y += line_height
+    y += 10
+    for line in output_lines:
+        color = AMBER if line.startswith("Authored ") else TEXT
+        draw.text((58, y), line, font=_font(19), fill=color)
+        y += line_height
+    y += line_height
+    for line in verify_lines:
+        draw.text((58, y), line, font=_font(19), fill=GREEN)
+        y += line_height
+    y += 10
+    for line in verification_lines:
+        color = CYAN if line.lstrip().startswith(("{", "}")) else TEXT
+        draw.text((58, y), line, font=_font(19), fill=color)
+        y += line_height
+    return image
+
+
 def _collect_test_count(repository: Path) -> int:
     environment = os.environ.copy()
     environment.pop("PYTEST_ADDOPTS", None)
@@ -1089,6 +1646,8 @@ def _coverage_summary(coverage_path: Path, *, test_count: int) -> dict[str, Any]
     decoded = json.loads(coverage_path.read_text(encoding="utf-8"))
     selected = (
         ("artifact_io", "src/receipt_extractor/artifact_io.py"),
+        ("evaluation", "src/receipt_extractor/evaluation.py"),
+        ("evaluation_cli", "src/receipt_extractor/evaluation_cli.py"),
         ("file_io", "src/receipt_extractor/file_io.py"),
         ("main", "src/receipt_extractor/main.py"),
         ("provenance", "src/receipt_extractor/provenance.py"),
@@ -1180,6 +1739,512 @@ def _svg_text(
         f'font-family="system-ui, sans-serif" font-size="{size}" '
         f'font-weight="{weight}" fill="{color}">{escaped}</text>'
     )
+
+
+def _svg_attribute(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _evaluation_scorecard_svg(capture: _EvaluationCapture) -> str:
+    metrics = capture.report.body.metrics
+    exact_records = metrics.record_exact_field_histogram[len(evaluation.FIELD_ORDER)]
+    width, height = 1440, 770
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
+        f'height="{height}" viewBox="0 0 {width} {height}" role="img" '
+        'aria-labelledby="title description">',
+        '<title id="title">Authored negative-control evaluation scorecard</title>',
+        (
+            '<desc id="description">Exact aggregate counts produced by the '
+            "offline evaluator for eight repository-authored synthetic cases. "
+            "This is evaluator calibration, not model accuracy.</desc>"
+        ),
+        f'<rect width="{width}" height="{height}" fill="{CANVAS}"/>',
+        _svg_text(
+            x=52,
+            y=62,
+            text="Exact evaluator calibration, without rounded scores",
+            size=34,
+            anchor="start",
+        ),
+        _svg_text(
+            x=54,
+            y=101,
+            text=(
+                "Every number below is read from the validated aggregate "
+                "evaluation receipt."
+            ),
+            size=19,
+            color=MUTED,
+            anchor="start",
+            weight=400,
+        ),
+    ]
+    summary_cards = (
+        (52, "CASES", str(metrics.case_count), CYAN),
+        (
+            360,
+            "FIELD AGREEMENT",
+            f"{metrics.all_fields.exact} / {metrics.all_fields.total}",
+            GREEN,
+        ),
+        (
+            770,
+            "EXACT RECORDS",
+            f"{exact_records} / {metrics.case_count}",
+            AMBER,
+        ),
+        (
+            1080,
+            "HISTOGRAM 0..4",
+            "["
+            + ", ".join(str(value) for value in metrics.record_exact_field_histogram)
+            + "]",
+            PURPLE,
+        ),
+    )
+    card_widths = (270, 370, 270, 308)
+    for (x, label, value, accent), card_width in zip(
+        summary_cards, card_widths, strict=True
+    ):
+        parts.extend(
+            (
+                (
+                    f'<rect x="{x}" y="136" width="{card_width}" height="112" '
+                    f'rx="20" fill="{PANEL}" stroke="{accent}" stroke-width="2"/>'
+                ),
+                _svg_text(
+                    x=x + 22,
+                    y=171,
+                    text=label,
+                    size=15,
+                    color=MUTED,
+                    anchor="start",
+                    weight=500,
+                ),
+                _svg_text(
+                    x=x + 22,
+                    y=219,
+                    text=value,
+                    size=27,
+                    color=accent,
+                    anchor="start",
+                ),
+            )
+        )
+
+    legend = (
+        ("exact", GREEN),
+        ("omission", AMBER),
+        ("spurious", PURPLE),
+        ("substitution", RED),
+    )
+    for index, (label, color) in enumerate(legend):
+        x = 330 + index * 230
+        parts.extend(
+            (
+                f'<rect x="{x}" y="278" width="20" height="20" rx="5" fill="{color}"/>',
+                _svg_text(
+                    x=x + 31,
+                    y=294,
+                    text=label,
+                    size=16,
+                    color=MUTED,
+                    anchor="start",
+                    weight=500,
+                ),
+            )
+        )
+
+    colors = (GREEN, AMBER, PURPLE, RED)
+    for row, item in enumerate(metrics.per_field):
+        y = 330 + row * 82
+        counts = (
+            item.outcomes.exact,
+            item.outcomes.omission,
+            item.outcomes.spurious,
+            item.outcomes.substitution,
+        )
+        parts.append(
+            _svg_text(
+                x=54,
+                y=y + 35,
+                text=item.field,
+                size=22,
+                anchor="start",
+            )
+        )
+        cursor = 250
+        for count, color in zip(counts, colors, strict=True):
+            segment_width = 720 * count // metrics.case_count
+            if segment_width:
+                parts.extend(
+                    (
+                        (
+                            f'<rect x="{cursor}" y="{y}" width="{segment_width}" '
+                            f'height="48" rx="10" fill="{color}"/>'
+                        ),
+                        _svg_text(
+                            x=cursor + segment_width // 2,
+                            y=y + 32,
+                            text=str(count),
+                            size=18,
+                            color=CANVAS,
+                        ),
+                    )
+                )
+            cursor += segment_width
+        parts.append(
+            _svg_text(
+                x=1000,
+                y=y + 32,
+                text="counts  " + " / ".join(str(count) for count in counts),
+                size=16,
+                color=MUTED,
+                anchor="start",
+                weight=400,
+            )
+        )
+    parts.extend(
+        (
+            _svg_text(
+                x=52,
+                y=712,
+                text=(
+                    "Authored negative-control calibration · exact typed equality "
+                    "· not live-model accuracy"
+                ),
+                size=19,
+                color=AMBER,
+                anchor="start",
+                weight=500,
+            ),
+            _svg_text(
+                x=52,
+                y=744,
+                text=f"report_id  {capture.report.report_id}",
+                size=15,
+                color=MUTED,
+                anchor="start",
+                weight=400,
+            ),
+            "</svg>",
+        )
+    )
+    return "".join(parts)
+
+
+def _evaluation_confusion_svg(capture: _EvaluationCapture) -> str:
+    confusion = capture.report.body.metrics.category_confusion
+    width, height = 1440, 940
+    grid_x, grid_y, cell = 430, 216, 88
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
+        f'height="{height}" viewBox="0 0 {width} {height}" role="img" '
+        'aria-labelledby="title description">',
+        '<title id="title">Exact category confusion matrix</title>',
+        (
+            '<desc id="description">A fixed seven-label category confusion '
+            "matrix read from the aggregate evaluation receipt, with truth on "
+            "rows and authored control candidates on columns.</desc>"
+        ),
+        f'<rect width="{width}" height="{height}" fill="{CANVAS}"/>',
+        _svg_text(
+            x=52,
+            y=62,
+            text="Category confusion from the aggregate receipt",
+            size=34,
+            anchor="start",
+        ),
+        _svg_text(
+            x=54,
+            y=101,
+            text=(
+                "Truth on rows · authored negative control on columns · "
+                "all seven fixed labels retained"
+            ),
+            size=19,
+            color=MUTED,
+            anchor="start",
+            weight=400,
+        ),
+        _svg_text(
+            x=grid_x + cell * len(confusion.labels) // 2,
+            y=145,
+            text="CANDIDATE",
+            size=18,
+            color=CYAN,
+        ),
+        _svg_text(
+            x=75,
+            y=grid_y + cell * len(confusion.labels) // 2,
+            text="TRUTH",
+            size=18,
+            color=CYAN,
+            anchor="start",
+        ),
+    ]
+    column_lines = {
+        "Office Supplies": ("Office", "Supplies"),
+        "Entertainment": ("Entertain-", "ment"),
+    }
+    for column, label in enumerate(confusion.labels):
+        lines = column_lines.get(label, (label,))
+        for line_index, line in enumerate(lines):
+            parts.append(
+                _svg_text(
+                    x=grid_x + column * cell + cell // 2,
+                    y=176 + line_index * 18,
+                    text=line,
+                    size=13,
+                    color=MUTED,
+                    weight=500,
+                )
+            )
+    for row, (label, values) in enumerate(
+        zip(confusion.labels, confusion.matrix, strict=True)
+    ):
+        y = grid_y + row * cell
+        parts.append(
+            _svg_text(
+                x=400,
+                y=y + 53,
+                text=label,
+                size=16,
+                color=MUTED,
+                anchor="end",
+                weight=500,
+            )
+        )
+        for column, count in enumerate(values):
+            x = grid_x + column * cell
+            fill = PANEL_LIGHT if count == 0 else (PURPLE if count == 1 else GREEN)
+            text_color = MUTED if count == 0 else CANVAS
+            truth_attribute = _svg_attribute(label)
+            candidate_attribute = _svg_attribute(confusion.labels[column])
+            parts.extend(
+                (
+                    (
+                        f'<rect x="{x}" y="{y}" width="{cell - 4}" '
+                        f'height="{cell - 4}" rx="14" fill="{fill}" '
+                        f'stroke="{PANEL}" stroke-width="2" '
+                        f'data-truth="{truth_attribute}" '
+                        f'data-candidate="{candidate_attribute}" '
+                        f'data-count="{count}"/>'
+                    ),
+                    _svg_text(
+                        x=x + (cell - 4) // 2,
+                        y=y + 53,
+                        text=str(count),
+                        size=21,
+                        color=text_color,
+                    ),
+                )
+            )
+    nonzero = sum(1 for row in confusion.matrix for count in row if count != 0)
+    parts.extend(
+        (
+            _svg_text(
+                x=52,
+                y=875,
+                text=(
+                    f"{capture.report.body.metrics.case_count} observations · "
+                    f"{nonzero} nonzero cells · integer counts only"
+                ),
+                size=19,
+                color=GREEN,
+                anchor="start",
+            ),
+            _svg_text(
+                x=52,
+                y=910,
+                text=(
+                    "Sparse aggregate category cells may disclose authored fixture "
+                    "pairs; this public suite is synthetic."
+                ),
+                size=17,
+                color=MUTED,
+                anchor="start",
+                weight=400,
+            ),
+            "</svg>",
+        )
+    )
+    return "".join(parts)
+
+
+def _evaluation_bindings_svg(capture: _EvaluationCapture) -> str:
+    suite = capture.suite
+    report = capture.report
+    nodes = (
+        (
+            50,
+            188,
+            620,
+            126,
+            "Production-loaded inputs",
+            f"{len(suite.body.cases)} PNG descriptors",
+            suite.body.input_batch_digest,
+            CYAN,
+        ),
+        (
+            770,
+            188,
+            620,
+            126,
+            "Content-addressed suite",
+            suite.body.name,
+            suite.suite_id,
+            PURPLE,
+        ),
+        (
+            50,
+            414,
+            620,
+            126,
+            "Pinned evaluator semantics",
+            report.body.evaluator.id,
+            report.body.evaluator.digest,
+            AMBER,
+        ),
+        (
+            770,
+            414,
+            620,
+            126,
+            "Aggregate evaluation receipt",
+            report.body.mode,
+            report.report_id,
+            GREEN,
+        ),
+    )
+    parts = [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" '
+        'viewBox="0 0 1440 760" role="img" '
+        'aria-labelledby="title description">',
+        '<title id="title">Synthetic evaluation identity bindings</title>',
+        (
+            '<desc id="description">Exact image descriptors bind into a '
+            "content-addressed suite. Pinned evaluator semantics and the full "
+            "suite are recomputed into one aggregate report, which the offline "
+            "verifier compares completely.</desc>"
+        ),
+        f'<rect width="1440" height="760" fill="{CANVAS}"/>',
+        "<defs>",
+        (
+            f'<marker id="evaluation-arrow" viewBox="0 0 10 10" refX="9" '
+            'refY="5" markerWidth="8" markerHeight="8" orient="auto">'
+            f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{MUTED}"/></marker>'
+        ),
+        "</defs>",
+        _svg_text(
+            x=52,
+            y=62,
+            text="From exact fixture bytes to a recomputed aggregate receipt",
+            size=34,
+            anchor="start",
+        ),
+        _svg_text(
+            x=54,
+            y=101,
+            text=(
+                "Domain-separated SHA-256 identities are mismatch guards, "
+                "not signatures or timestamps."
+            ),
+            size=19,
+            color=MUTED,
+            anchor="start",
+            weight=400,
+        ),
+        (
+            f'<path d="M 670 251 L 770 251" stroke="{MUTED}" stroke-width="3" '
+            'fill="none" marker-end="url(#evaluation-arrow)"/>'
+        ),
+        (
+            f'<path d="M 1080 314 L 1080 414" stroke="{MUTED}" stroke-width="3" '
+            'fill="none" marker-end="url(#evaluation-arrow)"/>'
+        ),
+        (
+            f'<path d="M 670 477 L 770 477" stroke="{MUTED}" stroke-width="3" '
+            'fill="none" marker-end="url(#evaluation-arrow)"/>'
+        ),
+    ]
+    for x, y, node_width, node_height, title, subtitle, digest, accent in nodes:
+        parts.extend(
+            (
+                (
+                    f'<rect x="{x}" y="{y}" width="{node_width}" '
+                    f'height="{node_height}" rx="22" fill="{PANEL}" '
+                    f'stroke="{accent}" stroke-width="3"/>'
+                ),
+                _svg_text(
+                    x=x + 24,
+                    y=y + 38,
+                    text=title,
+                    size=22,
+                    color=accent,
+                    anchor="start",
+                ),
+                _svg_text(
+                    x=x + 24,
+                    y=y + 70,
+                    text=subtitle,
+                    size=16,
+                    color=MUTED,
+                    anchor="start",
+                    weight=400,
+                ),
+                _svg_text(
+                    x=x + 24,
+                    y=y + 102,
+                    text=digest,
+                    size=14,
+                    anchor="start",
+                    weight=500,
+                ),
+            )
+        )
+    parts.extend(
+        (
+            '<rect x="220" y="622" width="1000" height="78" rx="20" '
+            f'fill="{PANEL}" stroke="{GREEN}" stroke-width="3"/>',
+            _svg_text(
+                x=720,
+                y=653,
+                text="Offline verifier",
+                size=21,
+                color=GREEN,
+            ),
+            _svg_text(
+                x=720,
+                y=682,
+                text=(
+                    "reload suite + reload report + recompute every metric + "
+                    "compare complete canonical report bytes"
+                ),
+                size=16,
+                color=MUTED,
+                weight=400,
+            ),
+            (
+                f'<path d="M 1080 540 C 1080 590 980 600 930 622" '
+                f'stroke="{MUTED}" stroke-width="3" fill="none" '
+                'marker-end="url(#evaluation-arrow)"/>'
+            ),
+            (
+                f'<path d="M 1360 314 C 1410 370 1400 590 1140 622" '
+                f'stroke="{MUTED}" stroke-width="2" stroke-dasharray="8 7" '
+                'fill="none" marker-end="url(#evaluation-arrow)"/>'
+            ),
+            "</svg>",
+        )
+    )
+    return "".join(parts)
 
 
 def _architecture_svg() -> str:
@@ -1655,12 +2720,14 @@ def _save_assets(
     *,
     asset_dir: Path,
     input_dir: Path,
+    evaluation_input_dir: Path,
     help_output: str,
     dry_run_output: str,
     replay_output: str,
     coverage: dict[str, Any],
     failures: _FailureEvidence,
     provenance_capture: _ProvenanceCapture,
+    evaluation_capture: _EvaluationCapture,
 ) -> None:
     asset_dir.mkdir(parents=True, exist_ok=True)
     montage = _receipt_montage(input_dir)
@@ -1699,6 +2766,11 @@ def _save_assets(
         verify_command=str(verify_command["normalized"]),
         verification_output=provenance_capture["verification_output"],
     )
+    evaluation_fixtures = _evaluation_fixture_montage(
+        evaluation_input_dir,
+        evaluation_capture,
+    )
+    evaluation_terminal = _evaluation_terminal_capture(evaluation_capture)
 
     raster_assets = {
         "demo-receipts.png": montage,
@@ -1708,6 +2780,8 @@ def _save_assets(
         "coverage.png": coverage_image,
         "failure-boundaries.png": failure_image,
         "cli-provenance.png": provenance_image,
+        "evaluation-fixtures.png": evaluation_fixtures,
+        "cli-evaluation.png": evaluation_terminal,
     }
     for name, image in raster_assets.items():
         image.save(asset_dir / name, format="PNG", compress_level=9)
@@ -1722,6 +2796,18 @@ def _save_assets(
     )
     (asset_dir / "provenance-bindings.svg").write_text(
         _provenance_svg(source),
+        encoding="utf-8",
+    )
+    (asset_dir / "evaluation-scorecard.svg").write_text(
+        _evaluation_scorecard_svg(evaluation_capture),
+        encoding="utf-8",
+    )
+    (asset_dir / "evaluation-confusion.svg").write_text(
+        _evaluation_confusion_svg(evaluation_capture),
+        encoding="utf-8",
+    )
+    (asset_dir / "evaluation-bindings.svg").write_text(
+        _evaluation_bindings_svg(evaluation_capture),
         encoding="utf-8",
     )
     frames = [
@@ -1756,9 +2842,12 @@ def capture(
 ) -> None:
     demo_dir = output_root / "demo"
     input_dir = demo_dir / "inputs"
+    evaluation_input_dir = demo_dir / "evaluation-inputs"
     evidence_dir = demo_dir / "evidence"
     asset_dir = output_root / "docs" / "assets"
     _save_inputs(input_dir)
+    evaluation_specs = _evaluation_fixture_specs()
+    _save_evaluation_inputs(evaluation_input_dir, evaluation_specs)
     images = file_io.load_images(input_dir)
     manifest_path = demo_dir / "replay-manifest.json"
     _write_json(manifest_path, _manifest_document(images))
@@ -1793,6 +2882,13 @@ def capture(
         demo_dir=demo_dir,
         evidence_dir=evidence_dir,
     )
+    evaluation_capture = _capture_evaluation_evidence(
+        repository=repository,
+        demo_dir=demo_dir,
+        input_dir=evaluation_input_dir,
+        evidence_dir=evidence_dir,
+        specs=evaluation_specs,
+    )
 
     coverage = _coverage_summary(
         coverage_path,
@@ -1802,12 +2898,14 @@ def capture(
     _save_assets(
         asset_dir=asset_dir,
         input_dir=input_dir,
+        evaluation_input_dir=evaluation_input_dir,
         help_output=help_output,
         dry_run_output=dry_run_output,
         replay_output=replay_output,
         coverage=coverage,
         failures=failures,
         provenance_capture=provenance_capture,
+        evaluation_capture=evaluation_capture,
     )
     _finalize_provenance_source(
         repository=repository,

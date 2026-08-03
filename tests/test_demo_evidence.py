@@ -16,7 +16,7 @@ from typing import Any, cast
 import pytest
 from PIL import Image
 
-from receipt_extractor import file_io, provenance, replay
+from receipt_extractor import evaluation, file_io, provenance, replay
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 DEMO = REPOSITORY / "demo"
@@ -24,6 +24,9 @@ ASSETS = REPOSITORY / "docs" / "assets"
 EXPECTED_DEMO_FILES = {
     "evidence/coverage-summary.json",
     "evidence/dry-run.json",
+    "evidence/evaluation-receipt.json",
+    "evidence/evaluation-receipt.txt",
+    "evidence/evaluation-verification.json",
     "evidence/failure-paths.json",
     "evidence/help.txt",
     "evidence/provenance-source.json",
@@ -35,6 +38,15 @@ EXPECTED_DEMO_FILES = {
     "failures/existing-output.json",
     "failures/provider-sentinel/openai.py",
     "failures/reversed-replay-manifest.json",
+    "evaluation-inputs/01-exact-cafe.png",
+    "evaluation-inputs/02-metro-amount-category.png",
+    "evaluation-inputs/03-hotel-date-vendor.png",
+    "evaluation-inputs/04-office-date-amount.png",
+    "evaluation-inputs/05-cinema-vendor-category.png",
+    "evaluation-inputs/06-exact-kiosk.png",
+    "evaluation-inputs/07-null-date-vendor.png",
+    "evaluation-inputs/08-null-amount-category.png",
+    "evaluation-suite.json",
     "inputs/cafe-lumen.png",
     "inputs/metro-line.webp",
     "replay-manifest.json",
@@ -49,6 +61,11 @@ EXPECTED_ASSET_FILES = {
     "coverage.svg",
     "demo-receipts.png",
     "demo.gif",
+    "cli-evaluation.png",
+    "evaluation-bindings.svg",
+    "evaluation-confusion.svg",
+    "evaluation-fixtures.png",
+    "evaluation-scorecard.svg",
     "failure-boundaries.png",
     "provenance-bindings.svg",
 }
@@ -57,6 +74,7 @@ EXPECTED_SOURCE_FILES = {
     "Makefile",
     "README.md",
     "docs/run-provenance.md",
+    "docs/synthetic-evaluation.md",
     "pyproject.toml",
     "requirements-dev.txt",
     "requirements.txt",
@@ -64,6 +82,8 @@ EXPECTED_SOURCE_FILES = {
     "src/receipt_extractor/__init__.py",
     "src/receipt_extractor/artifact_io.py",
     "src/receipt_extractor/file_io.py",
+    "src/receipt_extractor/evaluation.py",
+    "src/receipt_extractor/evaluation_cli.py",
     "src/receipt_extractor/gpt.py",
     "src/receipt_extractor/main.py",
     "src/receipt_extractor/provenance.py",
@@ -76,6 +96,10 @@ EXPECTED_SOURCE_FILES = {
     "tests/test_cli_provenance.py",
     "tests/test_demo_evidence.py",
     "tests/test_file_io.py",
+    "tests/test_evaluation_cli.py",
+    "tests/test_evaluation_io.py",
+    "tests/test_evaluation_report.py",
+    "tests/test_evaluation_suite.py",
     "tests/test_gpt.py",
     "tests/test_main_internals.py",
     "tests/test_provenance.py",
@@ -135,6 +159,179 @@ def test_replay_evidence_matches_bound_provider_and_raw_manifest_sha() -> None:
 
     assert provider.manifest_sha256 == raw_manifest_sha
     assert _json_object(DEMO / "evidence" / "replay-result.json") == expected
+
+
+def test_evaluation_fixtures_pass_production_preflight_and_bind_suite() -> None:
+    input_dir = DEMO / "evaluation-inputs"
+    images = file_io.load_images(input_dir)
+    suite = evaluation.load_evaluation_suite(DEMO / "evaluation-suite.json")
+    expected_names = [
+        "01-exact-cafe.png",
+        "02-metro-amount-category.png",
+        "03-hotel-date-vendor.png",
+        "04-office-date-amount.png",
+        "05-cinema-vendor-category.png",
+        "06-exact-kiosk.png",
+        "07-null-date-vendor.png",
+        "08-null-amount-category.png",
+    ]
+    descriptors = [replay.descriptor_for(image) for image in images]
+
+    assert [image.name for image in images] == expected_names
+    assert descriptors == [case.input for case in suite.body.cases]
+    assert suite.body.input_batch_digest == replay.batch_digest(descriptors)
+    assert [case.case_id for case in suite.body.cases] == [
+        "exact-cafe",
+        "metro-amount-category",
+        "hotel-date-vendor",
+        "office-date-amount",
+        "cinema-vendor-category",
+        "exact-kiosk",
+        "null-date-vendor",
+        "null-amount-category",
+    ]
+
+
+def test_evaluation_receipt_recomputes_exact_balanced_aggregates() -> None:
+    suite = evaluation.load_evaluation_suite(DEMO / "evaluation-suite.json")
+    report_path = DEMO / "evidence" / "evaluation-receipt.json"
+    report = evaluation.load_evaluation_report(report_path)
+    evaluation.verify_evaluation_report(suite=suite, report=report)
+    metrics = report.body.metrics
+
+    assert metrics.case_count == 8
+    assert [
+        (
+            item.outcomes.exact,
+            item.outcomes.omission,
+            item.outcomes.spurious,
+            item.outcomes.substitution,
+        )
+        for item in metrics.per_field
+    ] == [(5, 1, 1, 1)] * 4
+    assert (
+        metrics.all_fields.exact,
+        metrics.all_fields.omission,
+        metrics.all_fields.spurious,
+        metrics.all_fields.substitution,
+    ) == (20, 4, 4, 4)
+    assert metrics.record_exact_field_histogram == (0, 0, 6, 0, 2)
+    assert metrics.category_confusion.labels == evaluation.CATEGORY_LABELS
+    assert metrics.category_confusion.matrix == (
+        (0, 0, 0, 0, 0, 0, 1),
+        (0, 1, 0, 0, 0, 0, 0),
+        (1, 0, 0, 0, 0, 0, 0),
+        (0, 0, 0, 1, 0, 0, 0),
+        (0, 0, 0, 0, 1, 0, 0),
+        (0, 1, 0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 0, 0, 2),
+    )
+    assert _json_object(DEMO / "evidence" / "evaluation-verification.json") == {
+        "mode": "verify-evaluation",
+        "schema_version": 1,
+        "verified": True,
+    }
+
+    report_text = report_path.read_text(encoding="ascii")
+    for case in suite.body.cases:
+        assert case.case_id not in report_text
+        assert case.input.name not in report_text
+        for value in (
+            case.truth.date,
+            case.truth.amount,
+            case.truth.vendor,
+            case.candidate.date,
+            case.candidate.amount,
+            case.candidate.vendor,
+        ):
+            if value is not None:
+                assert value not in report_text
+
+
+def test_evaluation_evidence_reexecutes_with_provider_and_network_blocked(
+    tmp_path: Path,
+) -> None:
+    sentinel = tmp_path / "sentinel"
+    sentinel.mkdir()
+    (sentinel / "openai.py").write_text(
+        'raise RuntimeError("provider import crossed during evaluation test")\n',
+        encoding="ascii",
+    )
+    (sentinel / "sitecustomize.py").write_text(
+        "import socket\n"
+        "def _blocked(*_args, **_kwargs):\n"
+        "    raise RuntimeError('network crossed during evaluation test')\n"
+        "socket.socket = _blocked\n"
+        "socket.create_connection = _blocked\n",
+        encoding="ascii",
+    )
+    environment = os.environ.copy()
+    environment.pop("OPENAI_API_KEY", None)
+    environment.pop("PYTEST_ADDOPTS", None)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(sentinel), str(REPOSITORY / "src"))
+    )
+    suite_path = DEMO / "evaluation-suite.json"
+    report_path = DEMO / "evidence" / "evaluation-receipt.json"
+    commands = (
+        (
+            ("evaluate", str(suite_path)),
+            report_path.read_text(encoding="ascii"),
+        ),
+        (
+            ("evaluate", str(suite_path), "--format", "text"),
+            (DEMO / "evidence" / "evaluation-receipt.txt").read_text(encoding="ascii"),
+        ),
+        (
+            ("verify", str(suite_path), str(report_path)),
+            (DEMO / "evidence" / "evaluation-verification.json").read_text(
+                encoding="ascii"
+            ),
+        ),
+    )
+    for arguments, expected_stdout in commands:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "receipt_extractor.evaluation_cli",
+                *arguments,
+            ],
+            cwd=REPOSITORY,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert completed.returncode == 0
+        assert completed.stdout == expected_stdout
+        assert completed.stderr == ""
+
+
+def test_evaluation_public_text_contains_no_host_paths_or_secret_markers() -> None:
+    paths = (
+        DEMO / "evaluation-suite.json",
+        DEMO / "evidence" / "evaluation-receipt.json",
+        DEMO / "evidence" / "evaluation-receipt.txt",
+        DEMO / "evidence" / "evaluation-verification.json",
+        ASSETS / "evaluation-scorecard.svg",
+        ASSETS / "evaluation-confusion.svg",
+        ASSETS / "evaluation-bindings.svg",
+    )
+    forbidden = (
+        str(REPOSITORY),
+        "/home/",
+        "Traceback",
+        "sk-",
+        "ghp_",
+        "github_pat_",
+        "OPENAI_API_KEY=",
+    )
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for marker in forbidden:
+            assert marker not in text, path.relative_to(REPOSITORY)
 
 
 def test_unchanged_demo_artifacts_keep_their_reviewed_bytes() -> None:
@@ -594,8 +791,14 @@ def test_raster_evidence_is_really_decodable_png_webp_and_gif() -> None:
         ASSETS / "coverage.png": "PNG",
         ASSETS / "demo-receipts.png": "PNG",
         ASSETS / "failure-boundaries.png": "PNG",
+        ASSETS / "cli-evaluation.png": "PNG",
+        ASSETS / "evaluation-fixtures.png": "PNG",
         ASSETS / "demo.gif": "GIF",
     }
+    for name in sorted(
+        path.name for path in (DEMO / "evaluation-inputs").glob("*.png")
+    ):
+        expected_formats[DEMO / "evaluation-inputs" / name] = "PNG"
 
     for path, expected_format in expected_formats.items():
         with Image.open(path) as image:
@@ -617,8 +820,18 @@ def test_svg_evidence_is_parseable_inert_and_locally_referenced() -> None:
     architecture = ET.parse(ASSETS / "architecture.svg")
     coverage = ET.parse(ASSETS / "coverage.svg")
     provenance_bindings = ET.parse(ASSETS / "provenance-bindings.svg")
+    evaluation_scorecard = ET.parse(ASSETS / "evaluation-scorecard.svg")
+    evaluation_confusion = ET.parse(ASSETS / "evaluation-confusion.svg")
+    evaluation_bindings = ET.parse(ASSETS / "evaluation-bindings.svg")
 
-    for document in (architecture, coverage, provenance_bindings):
+    for document in (
+        architecture,
+        coverage,
+        provenance_bindings,
+        evaluation_scorecard,
+        evaluation_confusion,
+        evaluation_bindings,
+    ):
         root = document.getroot()
         assert _local_name(root.tag) == "svg"
         for element in root.iter():
@@ -664,6 +877,68 @@ def test_svg_evidence_is_parseable_inert_and_locally_referenced() -> None:
     assert "Local verifier" in provenance_text
     assert "not authenticity" in provenance_text
 
+    suite = evaluation.load_evaluation_suite(DEMO / "evaluation-suite.json")
+    report = evaluation.load_evaluation_report(
+        DEMO / "evidence" / "evaluation-receipt.json"
+    )
+    scorecard_text = " ".join(evaluation_scorecard.getroot().itertext())
+    assert report.report_id in scorecard_text
+    assert (
+        f"{report.body.metrics.all_fields.exact} / "
+        f"{report.body.metrics.all_fields.total}"
+    ) in scorecard_text
+    assert (
+        f"{report.body.metrics.record_exact_field_histogram[4]} / "
+        f"{report.body.metrics.case_count}"
+    ) in scorecard_text
+    for item in report.body.metrics.per_field:
+        assert item.field in scorecard_text
+        counts = (
+            item.outcomes.exact,
+            item.outcomes.omission,
+            item.outcomes.spurious,
+            item.outcomes.substitution,
+        )
+        assert "counts  " + " / ".join(str(count) for count in counts) in (
+            scorecard_text
+        )
+
+    confusion_cells = [
+        element
+        for element in evaluation_confusion.getroot().iter()
+        if "data-count" in element.attrib
+    ]
+    expected_cells = [
+        (truth, candidate, str(count))
+        for truth, row in zip(
+            report.body.metrics.category_confusion.labels,
+            report.body.metrics.category_confusion.matrix,
+            strict=True,
+        )
+        for candidate, count in zip(
+            report.body.metrics.category_confusion.labels,
+            row,
+            strict=True,
+        )
+    ]
+    assert [
+        (
+            cell.attrib["data-truth"],
+            cell.attrib["data-candidate"],
+            cell.attrib["data-count"],
+        )
+        for cell in confusion_cells
+    ] == expected_cells
+
+    evaluation_binding_text = " ".join(evaluation_bindings.getroot().itertext())
+    for value in (
+        suite.suite_id,
+        suite.body.input_batch_digest,
+        report.body.evaluator.digest,
+        report.report_id,
+    ):
+        assert value in evaluation_binding_text
+
 
 def test_coverage_summary_matches_svg_text_and_configured_floor() -> None:
     summary = _json_object(DEMO / "evidence" / "coverage-summary.json")
@@ -691,6 +966,8 @@ def test_coverage_summary_matches_svg_text_and_configured_floor() -> None:
     assert f"{combined_percent:.2f}% combined" in coverage_text
     assert [module["module"] for module in modules] == [
         "artifact_io",
+        "evaluation",
+        "evaluation_cli",
         "file_io",
         "main",
         "provenance",
@@ -766,7 +1043,14 @@ def test_readme_links_every_reader_facing_visual_and_source_evidence() -> None:
         "docs/assets/cli-replay.png",
         "docs/assets/failure-boundaries.png",
         "docs/assets/provenance-bindings.svg",
+        "docs/assets/cli-evaluation.png",
+        "docs/assets/evaluation-bindings.svg",
+        "docs/assets/evaluation-confusion.svg",
+        "docs/assets/evaluation-fixtures.png",
+        "docs/assets/evaluation-scorecard.svg",
         "demo/inputs",
+        "demo/evaluation-inputs",
+        "demo/evaluation-suite.json",
         "demo/replay-manifest.json",
         "demo/failures",
         "demo/evidence/help.txt",
@@ -776,8 +1060,12 @@ def test_readme_links_every_reader_facing_visual_and_source_evidence() -> None:
         "demo/evidence/replay-result.json",
         "demo/evidence/replay-run.json",
         "demo/evidence/run-verification.json",
+        "demo/evidence/evaluation-receipt.json",
+        "demo/evidence/evaluation-receipt.txt",
+        "demo/evidence/evaluation-verification.json",
         "demo/evidence/coverage-summary.json",
         "docs/run-provenance.md",
+        "docs/synthetic-evaluation.md",
         "scripts/capture_demo.py",
     ):
         assert f"]({path})" in readme
@@ -793,6 +1081,7 @@ def test_source_distribution_manifest_keeps_evidence_reproducible() -> None:
         "include requirements.txt",
         "include requirements-dev.txt",
         "include docs/run-provenance.md",
+        "include docs/synthetic-evaluation.md",
         "recursive-include demo *",
         "recursive-include docs/assets *",
         "recursive-include scripts *.py",

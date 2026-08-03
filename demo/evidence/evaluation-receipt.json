@@ -1,0 +1,151 @@
+{
+  "body": {
+    "candidate": {
+      "id": "authored-negative-control/v1",
+      "live_model_output": false,
+      "origin": "repository-authored-deliberately-imperfect"
+    },
+    "evaluator": {
+      "digest": "sha256:0e7fd754958dce9f3e426b8988716296240e15e7cd98588c394d57675f5f55e2",
+      "id": "receipt-extractor/exact-field-evaluator",
+      "schema_version": 1
+    },
+    "input_batch_digest": "sha256:ec44e53db23c7b7731bfb9dab522eb0b26ba9518eb9a59484363d65f8be2f728",
+    "metrics": {
+      "all_fields": {
+        "exact": 20,
+        "omission": 4,
+        "spurious": 4,
+        "substitution": 4
+      },
+      "case_count": 8,
+      "category_confusion": {
+        "labels": [
+          "<null>",
+          "Meals",
+          "Transport",
+          "Lodging",
+          "Office Supplies",
+          "Entertainment",
+          "Other"
+        ],
+        "matrix": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          [
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2
+          ]
+        ]
+      },
+      "per_field": [
+        {
+          "field": "date",
+          "outcomes": {
+            "exact": 5,
+            "omission": 1,
+            "spurious": 1,
+            "substitution": 1
+          }
+        },
+        {
+          "field": "amount",
+          "outcomes": {
+            "exact": 5,
+            "omission": 1,
+            "spurious": 1,
+            "substitution": 1
+          }
+        },
+        {
+          "field": "vendor",
+          "outcomes": {
+            "exact": 5,
+            "omission": 1,
+            "spurious": 1,
+            "substitution": 1
+          }
+        },
+        {
+          "field": "category",
+          "outcomes": {
+            "exact": 5,
+            "omission": 1,
+            "spurious": 1,
+            "substitution": 1
+          }
+        }
+      ],
+      "record_exact_field_histogram": [
+        0,
+        0,
+        6,
+        0,
+        2
+      ]
+    },
+    "mode": "synthetic-negative-control-calibration",
+    "suite_id": "sha256:6327c74a55bf22e260ff599ce22ae99f2f54338bcce99adbb98d0fec9656ac5c",
+    "truth_origin": "repository-authored-synthetic"
+  },
+  "kind": "receipt-extractor-evaluation-report",
+  "report_id": "sha256:291dc7ec589f862f035201a63003778558999545cce965ae1f606bcbff84262c",
+  "schema_version": 1
+}

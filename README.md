@@ -30,6 +30,9 @@ call, and the failure frame contains only deliberately synthetic cases.
   contract, exact manifest bytes, ordered names, and typed outputs.
 - A separate offline mode verifies that bundle against current inputs and the
   exact replay manifest without importing OpenAI.
+- A provider-free evaluator calibrates exact typed comparison semantics against
+  a content-addressed authored control and fully recomputes its aggregate
+  report during verification.
 - Result files are private, exclusive, no-clobber reservations; stdout is
   opt-in.
 - Provider failures are redacted at the CLI boundary.
@@ -40,8 +43,8 @@ live API call is needed to verify the engineering claims.
 
 ## Verified synthetic demo
 
-The repository ships one real PNG and one lossless WebP fixture. Both are
-generated deterministically, visibly marked synthetic, decoded by the
+The extraction/replay demo uses one real PNG and one lossless WebP fixture.
+Both are generated deterministically, visibly marked synthetic, decoded by the
 production preflight, and bound to the checked-in replay manifest by name,
 MIME type, byte size, SHA-256, width, and height.
 
@@ -53,7 +56,7 @@ evidence that a model read the images. The exact source artifacts are
 [the strict manifest](demo/replay-manifest.json), and
 [the captured replay result](demo/evidence/replay-result.json).
 
-### Architecture
+### Extraction and replay architecture
 
 ![Architecture from receipt batch through preflight, execution mode, typed boundary, and sink](docs/assets/architecture.svg)
 
@@ -87,7 +90,7 @@ make check
 
 `make audit` is intentionally separate because dependency-advisory lookup is a
 networked operation. The regular gate uses generated images and fake providers;
-it makes no model request. The current gate is 221 tests with 93.26% combined
+it makes no model request. The current gate is 354 tests with 94.43% combined
 statement and branch coverage.
 
 ![Coverage generated from the current coverage.py JSON](docs/assets/coverage.svg)
@@ -207,6 +210,53 @@ and can expose correlatable digests; protect a real bundle like the original
 receipts and replay manifest. The tracked bundle is safe to publish only
 because every input and output is deliberately synthetic.
 
+## Calibrate the exact evaluator offline
+
+Eight visibly synthetic PNG fixtures exercise every exact-field outcome against
+repository-authored truth and one deliberately imperfect authored control. The
+control is never a model response. Every image is loaded through the production
+image boundary and bound into the content-addressed suite by its exact
+descriptor.
+
+![Eight deterministic synthetic evaluation fixtures with authored truth fields](docs/assets/evaluation-fixtures.png)
+
+```console
+receipt-evaluator evaluate demo/evaluation-suite.json --format text
+receipt-evaluator evaluate demo/evaluation-suite.json > .venv/evaluation-report.json
+receipt-evaluator verify demo/evaluation-suite.json .venv/evaluation-report.json
+```
+
+![Actual provider-free evaluation and verification CLI output](docs/assets/cli-evaluation.png)
+
+For this deliberately balanced control, each field has `5 exact / 1 omission /
+1 spurious / 1 substitution`. Across all fields the agreement is `20 / 32`;
+`2 / 8` records are completely exact. These are exact fixture-agreement counts,
+not model accuracy, benchmark performance, estimates, or confidence intervals.
+
+![Aggregate counts derived from the checked evaluation report](docs/assets/evaluation-scorecard.svg)
+
+![Category truth-to-authored-control confusion matrix derived from the checked report](docs/assets/evaluation-confusion.svg)
+
+The aggregate report omits case rows, input names, and every date, amount, and
+vendor value. Its fixed category taxonomy and nonzero aggregate cells can still
+disclose category pairs for a sparse suite. The suite itself contains complete
+authored values and input descriptors and would be sensitive for real data.
+
+Suite, input, evaluator, and report hashes are deterministic mismatch guards:
+they are linkable fingerprints, not anonymization, signatures, timestamps,
+authorship proof, or evidence that a model ran. Verification reloads both
+bounded JSON files, recomputes the complete report from the exact suite, and
+compares canonical report bytes.
+
+![Evaluation identities and full offline recomputation path](docs/assets/evaluation-bindings.svg)
+
+Inspect the exact [evaluation inputs](demo/evaluation-inputs),
+[suite](demo/evaluation-suite.json), generated
+[JSON report](demo/evidence/evaluation-receipt.json),
+[text report](demo/evidence/evaluation-receipt.txt), fixed
+[verification output](demo/evidence/evaluation-verification.json), and
+[contract specification](docs/synthetic-evaluation.md).
+
 ## Run live extraction
 
 Set the key only in the process environment. Never place it in a repository
@@ -315,6 +365,7 @@ damage the tracked sentinel while it is being detected.
 | Provider | explicit upload acknowledgement, bounded retries/timeout, typed response | model accuracy or zero retention |
 | Replay | exact ordered batch, strict manifest, pinned reads | signature, authenticity, or independent attestation |
 | Run provenance | four digest bindings, ordered names/outputs, current schema, exact manifest bytes | authorship, timestamp, model execution, or tamper-proof history |
+| Synthetic evaluation | strict typed outcomes, reconciled aggregates, complete report recomputation | model accuracy, statistical generalization, anonymity, or authenticity |
 | Output | private no-clobber file, held descriptor, cleanup checks | atomic recovery from power or host failure |
 
 Caught provider exception text is not printed. This narrow guarantee does not
@@ -328,22 +379,28 @@ Visual evidence is generated by
 exact help transcript is also available as
 [`demo/evidence/help.txt`](demo/evidence/help.txt). The generator:
 
-1. creates both visibly synthetic receipts;
-2. loads them through `file_io.load_images`;
-3. builds the canonical exact-batch manifest;
+1. creates both visibly synthetic extraction/replay receipts and eight visibly
+   synthetic evaluation fixtures;
+2. loads all ten images through `file_io.load_images`;
+3. builds the canonical exact-batch replay manifest and content-addressed
+   evaluation suite from the resulting production descriptors;
 4. executes the real help, dry-run, and replay commands with no API key;
 5. creates and verifies the replay-run bundle in a private scratch directory
    with the poison provider first on `PYTHONPATH`;
 6. publishes the synthetic bundle only after successful local verification;
 7. executes four expected failures, including live preflight guarded by a
    poison provider import;
-8. records exact streams, normalized repository-relative argv, output absence,
-   and no-clobber hashes;
-9. reads coverage.py JSON from the full test run;
-10. renders real terminal captures, diagrams, chart, failure gallery, and the
-    seven-frame GIF;
-11. records SHA-256 and byte size for every other generated artifact and
-    relevant source, then rejects any path outside the exact 27-file allowlist.
+8. runs evaluator JSON, evaluator text, and full verification commands with no
+   key while provider import and network sockets are poisoned;
+9. reloads both evaluation artifacts and recomputes the complete report before
+   any evaluation visual is rendered;
+10. records exact streams, normalized repository-relative argv, output absence,
+    and no-clobber hashes;
+11. reads coverage.py JSON from the full test run;
+12. renders real terminal captures, diagrams, charts, fixture montages, the
+    failure gallery, and the seven-frame GIF;
+13. records SHA-256 and byte size for every other generated artifact and
+    relevant source, then rejects any path outside the exact 44-file allowlist.
 
 Regenerate the tracked artifacts:
 
@@ -372,6 +429,8 @@ the evidence, the check fails until the visual refresh is intentional.
 ```text
 src/receipt_extractor/
   artifact_io.py   # shared bounded, descriptor-pinned strict JSON reads
+  evaluation.py    # content-addressed suite, exact metrics, full verifier
+  evaluation_cli.py  # provider-free evaluate and verify commands
   file_io.py       # pinned-FD discovery, bounded reads, decode, and data URLs
   gpt.py           # typed OpenAI Responses adapter
   main.py          # CLI, provider boundary, result validation, private output
@@ -382,8 +441,10 @@ scripts/
   capture_demo.py  # fixtures, real CLI captures, diagrams, chart, and GIF
 demo/
   inputs/          # visibly synthetic PNG and lossless WebP receipts
+  evaluation-inputs/  # eight authored-truth PNG calibration fixtures
   failures/        # corrupt batch, reversed manifest, provider tripwire, sink
-  evidence/        # exact streams, run bundle, source hashes, and coverage
+  evidence/        # exact streams, run/evaluation receipts, hashes, coverage
+  evaluation-suite.json
   replay-manifest.json
 docs/assets/       # generated README visuals; checked by make demo-check
 tests/
@@ -392,6 +453,10 @@ tests/
   test_cli.py              # privacy modes, replay integration, output failures
   test_cli_provenance.py   # creation/verification integration and no-clobber
   test_demo_evidence.py    # re-execution, hashes, allowlist, GIF/SVG integrity
+  test_evaluation_suite.py  # semantic suite identity and strict validation
+  test_evaluation_report.py # aggregate reconciliation and confusion matrix
+  test_evaluation_io.py     # bounded loaders and full recomputation verifier
+  test_evaluation_cli.py    # provider-free CLI streams and failure privacy
   test_gpt.py              # fake typed Responses calls; never a live request
   test_provenance.py       # golden vectors and binding mutation matrix
   test_replay.py           # manifest grammar, path attacks, exact-batch binding

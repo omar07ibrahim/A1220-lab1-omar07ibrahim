@@ -1,0 +1,206 @@
+{
+  "body": {
+    "candidate": {
+      "id": "authored-negative-control/v1",
+      "live_model_output": false,
+      "origin": "repository-authored-deliberately-imperfect"
+    },
+    "cases": [
+      {
+        "candidate": {
+          "amount": "$18.40",
+          "category": "Meals",
+          "date": "2026-07-24",
+          "vendor": "Cafe Lumen"
+        },
+        "case_id": "exact-cafe",
+        "input": {
+          "height": 900,
+          "media_type": "image/png",
+          "name": "01-exact-cafe.png",
+          "sha256": "0d56b18b8eba4e33d7801b6c8419ed8a0d8dd8e4ec4f53fc56258065da9a8d13",
+          "size_bytes": 36513,
+          "width": 720
+        },
+        "truth": {
+          "amount": "$18.40",
+          "category": "Meals",
+          "date": "2026-07-24",
+          "vendor": "Cafe Lumen"
+        }
+      },
+      {
+        "candidate": {
+          "amount": "$3.52",
+          "category": null,
+          "date": "2026-07-25",
+          "vendor": "Metro Line"
+        },
+        "case_id": "metro-amount-category",
+        "input": {
+          "height": 900,
+          "media_type": "image/png",
+          "name": "02-metro-amount-category.png",
+          "sha256": "c502bee45a57deac29e2de0be7b162f5d09c24c39faef4e69018d3d62ab97925",
+          "size_bytes": 38994,
+          "width": 720
+        },
+        "truth": {
+          "amount": "$3.25",
+          "category": "Transport",
+          "date": "2026-07-25",
+          "vendor": "Metro Line"
+        }
+      },
+      {
+        "candidate": {
+          "amount": "$142.00",
+          "category": "Lodging",
+          "date": null,
+          "vendor": "North Star Hotel"
+        },
+        "case_id": "hotel-date-vendor",
+        "input": {
+          "height": 900,
+          "media_type": "image/png",
+          "name": "03-hotel-date-vendor.png",
+          "sha256": "6fd786b142d2e7623047f4eaffffe68982a279ce6edd445238529c20a5344705",
+          "size_bytes": 37159,
+          "width": 720
+        },
+        "truth": {
+          "amount": "$142.00",
+          "category": "Lodging",
+          "date": "2026-07-26",
+          "vendor": "Northstar Hotel"
+        }
+      },
+      {
+        "candidate": {
+          "amount": null,
+          "category": "Office Supplies",
+          "date": "2026-07-17",
+          "vendor": "Paper Square"
+        },
+        "case_id": "office-date-amount",
+        "input": {
+          "height": 900,
+          "media_type": "image/png",
+          "name": "04-office-date-amount.png",
+          "sha256": "10f8ea5edc634ea561180d223cb2937cd164c757214aa3f9a3902a06d73e3d43",
+          "size_bytes": 39803,
+          "width": 720
+        },
+        "truth": {
+          "amount": "$27.80",
+          "category": "Office Supplies",
+          "date": "2026-07-27",
+          "vendor": "Paper Square"
+        }
+      },
+      {
+        "candidate": {
+          "amount": "$14.00",
+          "category": "Meals",
+          "date": "2026-07-28",
+          "vendor": null
+        },
+        "case_id": "cinema-vendor-category",
+        "input": {
+          "height": 900,
+          "media_type": "image/png",
+          "name": "05-cinema-vendor-category.png",
+          "sha256": "ce814a7e4aaf41cde782a744279db28e034bbe6cc38fc40418f64a14e1a17d48",
+          "size_bytes": 39823,
+          "width": 720
+        },
+        "truth": {
+          "amount": "$14.00",
+          "category": "Entertainment",
+          "date": "2026-07-28",
+          "vendor": "Orbit Cinema"
+        }
+      },
+      {
+        "candidate": {
+          "amount": "$9.90",
+          "category": "Other",
+          "date": "2026-07-29",
+          "vendor": "Civic Kiosk"
+        },
+        "case_id": "exact-kiosk",
+        "input": {
+          "height": 900,
+          "media_type": "image/png",
+          "name": "06-exact-kiosk.png",
+          "sha256": "4e065ec6c0eee3b12333678edc743b23358605b3299079f4a74b0dfcdec94e47",
+          "size_bytes": 38109,
+          "width": 720
+        },
+        "truth": {
+          "amount": "$9.90",
+          "category": "Other",
+          "date": "2026-07-29",
+          "vendor": "Civic Kiosk"
+        }
+      },
+      {
+        "candidate": {
+          "amount": "$6.75",
+          "category": "Other",
+          "date": "2026-07-30",
+          "vendor": "Unnamed Stall"
+        },
+        "case_id": "null-date-vendor",
+        "input": {
+          "height": 900,
+          "media_type": "image/png",
+          "name": "07-null-date-vendor.png",
+          "sha256": "003e9f66dedeaa995c88882a86f2b00fae48fa7ca5e20fe4782c198c264ad88e",
+          "size_bytes": 37387,
+          "width": 720
+        },
+        "truth": {
+          "amount": "$6.75",
+          "category": "Other",
+          "date": null,
+          "vendor": null
+        }
+      },
+      {
+        "candidate": {
+          "amount": "$12.00",
+          "category": "Other",
+          "date": "2026-07-31",
+          "vendor": "Pop-up Booth"
+        },
+        "case_id": "null-amount-category",
+        "input": {
+          "height": 900,
+          "media_type": "image/png",
+          "name": "08-null-amount-category.png",
+          "sha256": "9ff87e743bb7156a246f52b234b47149f7e2da513ff61b57fbda7bc0217a1559",
+          "size_bytes": 39979,
+          "width": 720
+        },
+        "truth": {
+          "amount": null,
+          "category": null,
+          "date": "2026-07-31",
+          "vendor": "Pop-up Booth"
+        }
+      }
+    ],
+    "evaluator": {
+      "digest": "sha256:0e7fd754958dce9f3e426b8988716296240e15e7cd98588c394d57675f5f55e2",
+      "id": "receipt-extractor/exact-field-evaluator",
+      "schema_version": 1
+    },
+    "input_batch_digest": "sha256:ec44e53db23c7b7731bfb9dab522eb0b26ba9518eb9a59484363d65f8be2f728",
+    "name": "balanced-authored-negative-control-v1",
+    "truth_origin": "repository-authored-synthetic"
+  },
+  "kind": "receipt-extractor-evaluation-suite",
+  "schema_version": 1,
+  "suite_id": "sha256:6327c74a55bf22e260ff599ce22ae99f2f54338bcce99adbb98d0fec9656ac5c"
+}

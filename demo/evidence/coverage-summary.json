@@ -7,6 +7,14 @@
       "percent": 90.57
     },
     {
+      "module": "evaluation",
+      "percent": 97.49
+    },
+    {
+      "module": "evaluation_cli",
+      "percent": 96.88
+    },
+    {
       "module": "file_io",
       "percent": 91.91
     },
@@ -32,5 +40,5 @@
     }
   ],
   "schema_version": 1,
-  "test_count": 350
+  "test_count": 354
 }
