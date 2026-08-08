@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONNOUSERSITE: "1"
+  PYTHONSAFEPATH: "1"
+
+jobs:
+  quality:
+    name: Offline quality and reproducible evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the immutable event revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Assert event, runtime, and clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "omar07ibrahim/A1220-lab1-omar07ibrahim"
+          if test "$GITHUB_EVENT_NAME" = "push"; then
+            test "$GITHUB_REF" = "refs/heads/main"
+          else
+            test "$GITHUB_EVENT_NAME" = "pull_request"
+            [[ "$GITHUB_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]]
+          fi
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
+          test "$(python -c 'import platform; print(platform.python_version())')" = "3.12.12"
+          test -z "${OPENAI_API_KEY:-}"
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+
+      - name: Install the exact declared environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --requirement requirements-dev.txt
+          python -m pip install --no-deps --no-build-isolation --editable .
+          python -m pip check
+
+      - name: Run the complete offline gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          make check PYTHON=python
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+
+  distribution:
+    name: Build and smoke-test distributions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the immutable event revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Assert exact clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "omar07ibrahim/A1220-lab1-omar07ibrahim"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
+          test "$(python -c 'import platform; print(platform.python_version())')" = "3.12.12"
+          test -z "${OPENAI_API_KEY:-}"
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+
+      - name: Build source and wheel distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --requirement requirements-dev.txt
+          python -m build --no-isolation
+          expected=$'auditable_receipt_extractor-0.4.0-py3-none-any.whl\nauditable_receipt_extractor-0.4.0.tar.gz'
+          test "$(find dist -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)" = "$expected"
+
+      - name: Exercise the installed wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$RUNNER_TEMP/a1220-wheel-runtime"
+          test ! -e "$runtime"
+          python -m venv "$runtime"
+          "$runtime/bin/python" -m pip install --requirement requirements.txt
+          "$runtime/bin/python" -m pip install             --no-deps             dist/auditable_receipt_extractor-0.4.0-py3-none-any.whl
+          "$runtime/bin/python" -m pip check
+          env -u OPENAI_API_KEY -u PYTHONHOME -u PYTHONPATH             "$runtime/bin/receipt-extractor" --help > "$RUNNER_TEMP/receipt-extractor-help.txt"
+          env -u OPENAI_API_KEY -u PYTHONHOME -u PYTHONPATH             "$runtime/bin/receipt-evaluator" --help > "$RUNNER_TEMP/receipt-evaluator-help.txt"
+          test -s "$RUNNER_TEMP/receipt-extractor-help.txt"
+          test -s "$RUNNER_TEMP/receipt-evaluator-help.txt"
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+
+      - name: Upload verified distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: a1220-distributions-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          include-hidden-files: false
+          compression-level: 0
+          retention-days: 14
