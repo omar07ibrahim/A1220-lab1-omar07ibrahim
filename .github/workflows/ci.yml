@@ -23,7 +23,7 @@ jobs:
   quality:
     name: Offline quality and reproducible evidence
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out the immutable event revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,11 +68,88 @@ jobs:
           python -m pip check
 
       - name: Run the complete offline gate
+        id: evidence_gate
         shell: bash
         run: |
           set -euo pipefail
+          if make check PYTHON=python; then
+            test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+            echo "drift=false" >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          make demo PYTHON=python
           make check PYTHON=python
-          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+          python - <<'PY'
+          import os
+          import stat
+          import subprocess
+          from pathlib import Path
+
+          roots = (Path("demo"), Path("docs/assets"))
+          tracked_raw = subprocess.run(
+              ("git", "ls-files", "-z", "--", *(root.as_posix() for root in roots)),
+              check=True,
+              stdout=subprocess.PIPE,
+          ).stdout
+          tracked = {
+              item.decode("utf-8", errors="strict")
+              for item in tracked_raw.split(b"\0")
+              if item
+          }
+          observed: set[str] = set()
+          for root in roots:
+              if root.is_symlink() or not root.is_dir():
+                  raise SystemExit("generated evidence root is unsafe")
+              for path in root.rglob("*"):
+                  mode = path.lstat().st_mode
+                  if stat.S_ISLNK(mode):
+                      raise SystemExit("generated evidence contains a symlink")
+                  if stat.S_ISDIR(mode):
+                      continue
+                  if not stat.S_ISREG(mode):
+                      raise SystemExit("generated evidence contains a special file")
+                  if stat.S_IMODE(mode) != 0o644:
+                      raise SystemExit("generated evidence has non-canonical permissions")
+                  observed.add(path.as_posix())
+          if observed != tracked:
+              raise SystemExit("generated evidence inventory differs from tracked scope")
+
+          def git_paths(*arguments: str) -> set[str]:
+              output = subprocess.run(
+                  ("git", *arguments), check=True, stdout=subprocess.PIPE
+              ).stdout
+              return {
+                  item.decode("utf-8", errors="strict")
+                  for item in output.split(b"\0")
+                  if item
+              }
+
+          dirty = git_paths("diff", "--name-only", "-z", "--")
+          dirty |= git_paths("diff", "--cached", "--name-only", "-z", "--")
+          if not dirty or not dirty.issubset(tracked):
+              raise SystemExit("evidence drift escapes the closed tracked scope")
+          if git_paths("ls-files", "--others", "--exclude-standard", "-z", "--"):
+              raise SystemExit("evidence regeneration created untracked files")
+          PY
+          echo "drift=true" >>"${GITHUB_OUTPUT}"
+
+      - name: Preserve regenerated demo evidence for review
+        if: steps.evidence_gate.outputs.drift == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: generated-demo-evidence-${{ github.run_id }}
+          path: |
+            demo/
+            docs/assets/
+          if-no-files-found: error
+          include-hidden-files: false
+          compression-level: 0
+          retention-days: 1
+
+      - name: Reject stale committed demo evidence
+        if: steps.evidence_gate.outputs.drift == 'true'
+        run: exit 1
 
   distribution:
     name: Build and smoke-test distributions
