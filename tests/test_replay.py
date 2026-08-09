@@ -449,7 +449,7 @@ def test_file_swap_between_stat_and_open_is_detected(
     def swap_before_open(
         path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
         flags: int,
-        mode: int = 0o777,
+        mode: int = 0o600,
         *,
         dir_fd: int | None = None,
     ) -> int:

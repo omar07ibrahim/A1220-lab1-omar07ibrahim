@@ -288,7 +288,7 @@ def test_directory_fd_swap_is_detected_without_blocking(
     def swap_before_open(
         path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
         flags: int,
-        mode: int = 0o777,
+        mode: int = 0o600,
         *,
         dir_fd: int | None = None,
     ) -> int:
